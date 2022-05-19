@@ -1,4 +1,4 @@
-# OperantBehaviorAnalysis-Python
+# DoricProcessingTools
 This repository will be used in the Nautiyal Lab for analyzing output from the Doric Fiber Photometry system.
 
 ## Background
