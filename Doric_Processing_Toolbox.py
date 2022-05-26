@@ -20,7 +20,11 @@
 #               1.1.0
 # May 19, 2022: Debugged shuffle_align. There were some unused variables that were holdovers from testing the logic out in a notebook.
 #               1.1.1
-__version__='1.1.1'
+# May 25, 2022: Updated calc_robust_z() to accept criteria for baseline normalization. Updated signal_processing_object.z_norm_deltaff to perform
+#               normalization based on a sliding window (default 40s based on Liston et al., 2020). 
+#               Added transient identification function id_transients() based on Liston et al., 2020 as well.
+#               1.2.0
+__version__='1.2.0'
 
 
 
@@ -39,7 +43,7 @@ import pickle as pkl
 
 def butter_lowpass(cutoff, nyq_freq, order=4):
     if float(cutoff)/nyq_freq >= 1.0:
-        warnings.warn(f'Target cutoff frequency ({cutoff}) for isosbestic signal filter exceeds signal nyquist frequency ({nyq_freq}).\n\
+        warnings.warn(f'Target cutoff frequency ({cutoff}) for lowpass filter exceeds signal nyquist frequency ({nyq_freq}).\n\
                         Cutoff frequency will be set to nyquist frequency - 1 {nyq_freq-1}.')
         cutoff = nyq_freq - 1
 
@@ -172,19 +176,23 @@ def bidirectional_trap_sum(y, x):
     # "Sign" and sum all AUCs to calculate final value.
     return sum(np.array(windowAUCs)*np.array(windowSigns))
 
-def calc_robust_z(input_signal):
+
+def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
     '''
-        Calculates a Robust Median Z scaled to the standard normal distribution
-        param input_signal:       Raw input signal to transform
-        return normalized_signal: Median z-scaled signal
+        Calculates a Robust Median Z scaled to the standard normal distribution relative to a specified window (none by default).
+        param input_signal:               Raw input signal to transform (must be np.array())
+        params ref_start_idx,ref_end_idx: The indices of the window on which to base the median/MAD calculation. Full signal by default. 
+        return normalized_signal:         Median z-scaled signal
     '''
 
-    median = np.median(input_signal)
-    MAD = np.median(abs(input_signal-median)) * 1.4826
-    normalized_signal = (input_signal - median) / MAD   
+    if ref_end_idx == 'end':
+        ref_end_idx = input_signal.size
+
+    med = np.median(input_signal[ref_start_idx:ref_end_idx])
+    MAD = np.median(abs(input_signal[ref_start_idx:ref_end_idx]-med))*1.4826
+    normalized_signal = (input_signal - med) / MAD   
 
     return normalized_signal
-
 
 
 # SIGNAL PROCESSING OBJECT CLASS
@@ -359,38 +367,43 @@ class sig_processing_object(object):
         return self.signal_processing_log
 
         
-    def z_norm_deltaff(self, ref_start_time = 0, ref_end_time = 'end'):
+    def z_norm_deltaff(self, normalization_window_size = 40):
         '''
-            Convert DeltaF/F to Robust Z scores. 
+            Convert DeltaF/F to Robust Z scores based on a sliding window. 
             param  self:                       attributes of signal_processing_object
+            param normalization_window_size    The size of the sliding window (in seconds) to use for calculating normalized_signal.
             create self.normalized_signal:     robust z normalized DeltaF/F
             return self.signal_processing_log: list containing a record of processing steps so far applied to the data.
         '''
 
+        # Convert window size into a chunk of indices using the internal sampling rate (samples/second).
+        average_window_step_size = int(normalization_window_size*self.sampling_rate)
+        
+        # Confirm that self.dff has been created and generate the end cap for the while loop.
         try:
-            if ref_start_time == 0:
-                start_idx = 0
-            else:
-                # Count the number of timestamps below the given start time. 
-                start_idx = sum(self.timestamps<=ref_start_time)
-           
-            if ref_end_time == 'end':
-                end_idx = self.dff.size-1
-            else:
-                # Count the number of timestamps below the given end time. 
-                end_idx = sum(self.timestamps<=ref_end_time)
-            
-
-            med = np.median(self.dff[start_idx:end_idx])
-            MAD = np.median(abs(self.dff[start_idx:end_idx]-med))*1.4826
-            # By multiplying MAD by 1.4826 (equivalent to multiplying the numerator by 0.6745), the resultant values
-            # will scale with "normal" z-scores. So, a z-score of ~2 will once again correspond to alpha=0.05. 
-            self.normalized_signal = (self.dff-med)/MAD
-            self.signal_processing_log.append(r'Robust Z-Score normalization performed on deltaF/F.')
-
-            return self.signal_processing_log
+            signal_size = self.dff.size
         except AttributeError as e:
             raise Exception('Cannot normalize deltaF/F if deltaF/F has not been created! Run calc_dff().') from e
+        
+        # Initialize loop
+        self.normalized_signal = np.array([])
+        window_start = 0
+        while window_start < signal_size:
+            # Set bounds for calculation and check whether we're at the end
+            window_end = window_start + average_window_step_size
+            if window_end > signal_size:
+                window_end = signal_size
+
+            # Perform the normalization on the current window and store it
+            self.normalized_signal = np.append(self.normalized_signal,
+                                               calc_robust_z(self.dff[window_start:window_end]))
+            
+            # Increment start idx to avoid infinite loop.
+            window_start = window_end
+        
+
+        self.signal_processing_log.append(f'Robust Z-Score normalization performed on deltaF/F using sliding {normalization_window_size}s window.')
+        return self.signal_processing_log
 
 
     def remove_artifacts(self, reference_channel = 'Isosbestic', threshold = -10, buffer_size = 50):
@@ -526,7 +539,7 @@ class sig_processing_object(object):
             return self.peak_timestamps:       ''
 
         '''
-
+        warnings.warn('This method does not work well. Use id_transients instead. This method will be removed in 2.0.0')
         #1) take the derivative of the squared difference between two different low pass filtered copies of the time series data (at 40Hz and 0.4Hz);
         
         # Generate low pass filtered copies at 40Hz and 0.4Hz. 
@@ -564,9 +577,84 @@ class sig_processing_object(object):
 
         self.signal_processing_log.append('Fluorescent peaks (and/or troughs) identified according to Gunyadin et al., 2014.')
 
-    # TODO Write peak detection algorithm according to https://doi.org/10.1126/science.aat8078
+
+    def id_transients(self, min_duration = 0.5):
+        '''
+            Peak detection algorithm according to https://doi.org/10.1126/science.aat8078
+            param  self:                                attributes of signal_processing_object
+            create self.transient_event_timestamps:     A dictionary containing key, value pairs of event_number, timestamps comprising the transient
+
+        '''
+
+        # Calculate normalized derivative of signal
+        dx = 1/self.sampling_rate
+        deriv = np.diff(self.normalized_signal, prepend=0)/dx
+        normed_deriv = calc_robust_z(deriv)
+
+        # Identify indices at which signal crosses threshold of 0.5 MADs in either direction
+        sig_switch_points = np.diff(self.normalized_signal > 0.5, prepend=0)
+        trans_starts, = np.where(sig_switch_points==1) # Transient starts intially identified by point where signal goes from <0.5 to >0.5.
+        trans_ends, = np.where(sig_switch_points==-1)
 
 
+        # What goes up, must come down. And if it doesn't come down, then it's because the end of the file cut it off.
+        if trans_starts.size != trans_ends.size:
+            trans_ends = np.append(trans_ends, sig_switch_points.size-1)
+        
+        # Determine the true transient start based on when the slope first becomes > 1.0 en route to signal crossing 0.5 MADs
+        event_timestamps = {}
+
+        # Some events identified using the simple threshold method will be the result of drift (i.e. fail derivative requirement)
+            # or are perhaps better characterized as extensions of a previous transient, but the signal dropped below 0.5 MADs for a single frame. 
+        events_to_delete = []
+        events_to_join = []
+
+        # Array for storing true transient starts based on derivative criteria
+        slope_starts = np.array([], dtype='int')
+        
+
+        for event_number, event_start in enumerate(trans_starts):
+
+            # Candidate start points are all indices prior to the already identified threshold-crossing
+            # where the derivative is BELOW 1.0 MAD above the median slope
+            candidates, = np.where(normed_deriv[:event_start+1]<1.0)
+            # The start of the rise is the last such point before the threshold crossing. 
+            # This allows the rise itself is classified as part of the transient.
+            slope_starts = np.append(slope_starts, int(candidates.max()))
+            
+            # Consider the possibilities identified prior to the regarding invalid transients
+            if candidates.max() == event_start:
+                # If the threshold crossing itself occurs with a low slope, it's either part of the previous transient ...
+                if event_start - trans_ends[event_number-1] == 1:
+                    # ... if and only if the current transient starts one frame after the previous ended. 
+                    events_to_join.append((event_number-1, event_number))
+                else: # If it isn't immediately on the tail of a previous event scrap it. It's drift.
+                    events_to_delete.append(event_number)
+              
+        # Linking events is as simple as extending the end point of the true transient
+        # to become the end point of the false transient
+        # It's best to work backwards to ensure that if there are multiple false transients 
+        # (consider a case where the transient is just above threshold and is a little noisy)
+        # The "true" end-point is carried backwards through the process.        
+        events_to_join.reverse() # To this end, reverse the tuples of events.
+
+        for main_event, tail_event in events_to_join:
+            trans_ends[main_event] = trans_ends[tail_event]
+            events_to_delete.append(tail_event)
+        
+        # trans_starts is omitted because it isn't used again. Cleaning it up doesn't matter.
+        trans_ends = np.delete(trans_ends, events_to_delete)
+        slope_starts = np.delete(slope_starts, events_to_delete)
+        
+        # Now record all the transient start, stop pairs AFTER filtering each for duration
+        self.transient_event_timestamps = {}
+        event_number = 0
+        for event_start, event_end in zip(slope_starts, trans_ends):
+            if self.timestamps[event_end] - self.timestamps[event_start] >= min_duration:
+                self.transient_event_timestamps[event_number] = self.timestamps[event_start:event_end]
+                event_number+=1
+        
+        self.signal_processing_log.append(f'Transients identified according to Liston et al., 2020. Min duration = {min_duration}s.')
 
     # TODO Comment these.
     def identify_TTLs(self):
