@@ -24,7 +24,9 @@
 #               normalization based on a sliding window (default 40s based on Liston et al., 2020). 
 #               Added transient identification function id_transients() based on Liston et al., 2020 as well.
 #               1.2.0
-__version__='1.2.0'
+# May 26, 2022: Tweaked id_transients() to handle when first event begins at very beginning of session. 
+#               1.2.1
+__version__='1.2.1'
 
 
 
@@ -620,15 +622,30 @@ class sig_processing_object(object):
             candidates, = np.where(normed_deriv[:event_start+1]<1.0)
             # The start of the rise is the last such point before the threshold crossing. 
             # This allows the rise itself is classified as part of the transient.
-            slope_starts = np.append(slope_starts, int(candidates.max()))
-            
+            try:
+                slope_starts = np.append(slope_starts, int(candidates.max()))
+            except ValueError:
+                # In the case that the recording itself begins with a spike in signal, there may be no valid candidates. 
+                # Attempting to take the max() of an empty array returns a ValueError. 
+                # If this is the case, then the slope can be said to start at bin 0 (the first frame of the recording)
+                # This is of course only possible if we are looking at the very first event.
+                if event_number == 0:
+                    slope_starts = np.append(slope_starts, 0)
+                    candidates = np.append(candidates, 0) # If you don't do this, you'll throw an error in the validity check below
+                else:
+                    raise ValueError # If the problem is something else, (even though I can't think of what it would be right now)
+                                     # I don't want to let it pass. This is basically just here to catch any future bugs. 
+
             # Consider the possibilities identified prior to the regarding invalid transients
             if candidates.max() == event_start:
                 # If the threshold crossing itself occurs with a low slope, it's either part of the previous transient ...
                 if event_start - trans_ends[event_number-1] == 1:
                     # ... if and only if the current transient starts one frame after the previous ended. 
                     events_to_join.append((event_number-1, event_number))
-                else: # If it isn't immediately on the tail of a previous event scrap it. It's drift.
+                elif event_number == 0:
+                    # However, if it is the first event, it can't be on the tail of the previous. See above, and let it be.
+                    pass
+                else: # If it isn't immediately on the tail of a previous event (or isn't itself the first event) scrap it. It's drift.
                     events_to_delete.append(event_number)
               
         # Linking events is as simple as extending the end point of the true transient
@@ -651,7 +668,7 @@ class sig_processing_object(object):
         event_number = 0
         for event_start, event_end in zip(slope_starts, trans_ends):
             if self.timestamps[event_end] - self.timestamps[event_start] >= min_duration:
-                self.transient_event_timestamps[event_number] = self.timestamps[event_start:event_end]
+                self.transient_event_timestamps[event_number] = self.timestamps[event_start:event_end+1]
                 event_number+=1
         
         self.signal_processing_log.append(f'Transients identified according to Liston et al., 2020. Min duration = {min_duration}s.')
