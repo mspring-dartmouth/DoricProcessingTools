@@ -26,7 +26,10 @@
 #               1.2.0
 # May 26, 2022: Tweaked id_transients() to handle when first event begins at very beginning of session. 
 #               1.2.1
-__version__='1.2.1'
+# June 14, 2022: Updated initial file reading in signal_processing_object.__init__ to support skipping bad lines. Note that the syntax for 
+#			     this function is updated in pandas 1.3.0 and above. I'm currently running 1.2.1 (coincidentally), so I've used the old syntax
+#				1.2.2
+__version__='1.2.2'
 
 
 
@@ -234,7 +237,7 @@ class sig_processing_object(object):
 
         # INITIATE FROM RAW DATA
         else:
-            self.input_data_frame = pd.read_csv(input_file, skiprows=1)
+            self.input_data_frame = pd.read_csv(input_file, skiprows=1, error_bad_lines=False, warn_bad_lines=True)
             
             # Purge extraneous columns
             # AOut-1/2 are just the sin functions corresponding to the LED driver.
