@@ -27,9 +27,15 @@
 # May 26, 2022: Tweaked id_transients() to handle when first event begins at very beginning of session. 
 #               1.2.1
 # June 14, 2022: Updated initial file reading in signal_processing_object.__init__ to support skipping bad lines. Note that the syntax for 
-#			     this function is updated in pandas 1.3.0 and above. I'm currently running 1.2.1 (coincidentally), so I've used the old syntax
-#				1.2.2
-__version__='1.2.2'
+#                this function is updated in pandas 1.3.0 and above. I'm currently running 1.2.1 (coincidentally), so I've used the old syntax
+#               1.2.2
+# June 28, 2022: Edited __init__, identify_TTLs, align_to_TTLs, and shuffle_align methods in signal_processing_object to work with multiple TTLs. 
+#                all ttl associated data are now stored in a dictionary, associated with key "TTL_1", "TTL_2", ... etc. The latter 3 methods also
+#                now take the desired TTL as a keyword argument, with TTL_1 as the default. 
+#                THIS IS A BREAKING CHANGE FROM THE OLD WAY OF HANDLING TTLS. 
+#                2.0.0
+__version__='2.0.0'
+
 
 
 
@@ -254,7 +260,10 @@ class sig_processing_object(object):
                                     'AIn-1 - Dem (AOut-1)': 'Signal',
                                     'AIn-1 - Dem (AOut-2)': 'Isosbestic',
                                     'AIn-1 - Raw': 'TotalRaw',
-                                    'DI/O-1': 'TTLOn'}
+                                    'DI/O-1': 'TTL_1',
+                                    'DI/O-2': 'TTL_2',
+                                    'DI/O-3': 'TTL_3',
+                                    'DI/O-4': 'TTL_4'}
             try:
                 new_col_names = [input_file_col_names[n] for n in self.input_data_frame.columns]
             except KeyError:
@@ -283,6 +292,7 @@ class sig_processing_object(object):
             self.timestamps = self.input_data_frame.Time.values
             self.signal = self.input_data_frame.Signal.values
             self.isosbestic = self.input_data_frame.Isosbestic.values
+            self.trial_data = {} # This will be used in align_to_TTLs to store TTL aligned data.
 
             # The doric system introduces a strange artifact every ~937 seconds in which the signal on both channels cuts out. 
             # Remove these artifacts. 
@@ -296,11 +306,8 @@ class sig_processing_object(object):
 
             # However, I prefer the greater temporal specificity offered by the raw input for calculating TTL times. 
             # As such, try to run identify_TTLs first. 
-            try:
-                self.identify_TTLs()
-            except AttributeError:
-                # If there are no TTLs, TTLOn won't exist and it will throw an attribute error. In this case, skip it. 
-                pass
+            self.identify_TTLs()
+            # If there are no TTLs, this will simply create an empty dictionary named self.ttl_starts.
             del self.input_data_frame
 
             # Apply lowpass butterworth filter to isosbestic channel.   
@@ -678,22 +685,32 @@ class sig_processing_object(object):
 
     # TODO Comment these.
     def identify_TTLs(self):
-      switch_points = np.diff(self.input_data_frame.TTLOn, prepend=0)
+        ttl_channels = filter(lambda x: 'TTL_' in x, self.input_data_frame.columns)
 
-      ttl_starts = np.where(switch_points==1)
-      self.ttl_starts = self.input_data_frame.loc[ttl_starts, 'Time'].values
+        self.ttl_starts = {}
+        for ttl_ch in ttl_channels:
 
-      self.signal_processing_log.append('TTL onset timestamps identified.')
+            switch_points = np.diff(self.input_data_frame.loc[:, ttl_ch], prepend=0)
+
+            ttl_starts = np.where(switch_points==1)
+            self.ttl_starts[ttl_ch] = self.input_data_frame.loc[ttl_starts, 'Time'].values
+
+        if len(self.ttl_starts) == 0:
+            log_txt = 'Attempted to identify TTL onsets, but none were found.' 
+        else:
+            log_txt = 'TTL onset timestamps identified.'
+        
+        self.signal_processing_log.append(log_txt)
 
 
-    def align_to_TTLs(self, baseline_time = 10, epoch_time = 10, signal_to_slice='Z_Signal'):
+    def align_to_TTLs(self, reference_TTL = 'TTL_1', baseline_time = 10, epoch_time = 10, signal_to_slice='Z_Signal'):
         # Determine number of bins to devote to baseline.
         n_baseline_bins = int(baseline_time * self.sampling_rate)
         # The next frame after n_baseline_bins is where we want to ensure that our 0 ends up in all slices. 
         target_zero_index = n_baseline_bins+1
 
         slices = []
-        for time in self.ttl_starts:
+        for time in self.ttl_starts[reference_TTL]:
             # Take an initial slice of timestamps based on baseline and epoch lengths relative to ttl_start 
             timestamps_bools = (self.processed_dataframe.index>(time-baseline_time)) & (self.processed_dataframe.index<(time+epoch_time))
             timestamps = self.processed_dataframe.index[timestamps_bools]
@@ -761,13 +778,13 @@ class sig_processing_object(object):
         # We've gotten all the baselines lined up, so now it's just a matter of setting the epoch lengths right. 
         # We'll do this by lopping off any extra from the end. 
         min_slice_length = min(s.size for s in slices)
-        self.trial_data = np.empty([len(slices), min_slice_length])
+        self.trial_data[reference_TTL] = np.empty([len(slices), min_slice_length])
 
         for i, s in enumerate(slices):
-            self.trial_data[i] = np.delete(s, range(min_slice_length, s.size))
+            self.trial_data[reference_TTL][i] = np.delete(s, range(min_slice_length, s.size))
 
 
-    def shuffle_align(self, n_iterations = 1000, baseline_time = 10, epoch_time=10, signal_to_slice='Z_Signal'):
+    def shuffle_align(self, reference_TTL = 'TTL_1', n_iterations = 1000, baseline_time = 10, epoch_time=10, signal_to_slice='Z_Signal'):
         ''' 
             This function will randomly select a number of timepoints equivalent to the number of TTLs registered
             and apply align_to_ttls to those timepoints. It will compute and store the average trace generated by this procedure. 
@@ -780,26 +797,22 @@ class sig_processing_object(object):
             param signal_to_slice:      The signal ('Z_Signal' or 'RawSignal') which align_to_TTLs is to align
             create self.shuffle_means:  An array in which each row contains the average trace of a set of shuffled data. 
         '''
-        # Begin by ensuring that a record of the True TTLs is maintained
-
         try:
-            # If true_ttls already exists, then shuffle_align has been run before.
-            # Do not overwrite. Generate a variable that will be used later (n_ttls) and move on.
-            n_ttls = self.true_ttls.size
-        except AttributeError:
-            # If true_ttls does not yet exist, create it. 
-            n_ttls = self.ttl_starts.size
-            self.true_ttls = self.ttl_starts.copy()
+            n_ttls = self.ttl_starts[reference_TTL].size
+        except AttributeError, KeyError as e:
+            # If the provided reference TTL has not yet been identified, ask user to run identify_ttls.
+            raise Exception(f"You can't shuffle the data based on {reference_TTL} without having run identify_TTLs for {reference_TTL}. Run identify_TTLs first.")
 
         # Determine the number of bins to compare sliced data against (this is prevent the selection of timestamps from too 
         #    close to either end of the trial)
         try:
-            bins = self.trial_data.shape[1]
-        except AttributeError as e:
-            raise Exception("I'm not going to let you run these shuffles before generating trial_data. Why risk guessing the bin size? Run align_to_TTLs and then try again.") from e           
+            bins = self.trial_data[reference_TTL].shape[1]
+        except AttributeError, KeyError as e:
+            raise Exception(f"I'm not going to let you run these shuffles before generating trial_data for {reference_TTL}. Why risk guessing the bin size? Run align_to_TTLs and then try again.") from e           
 
         # Now generate the shuffled data.
         self.shuffle_means = np.empty([n_iterations, bins]) # Array for storing output
+        shuffled_ttl_name = f'shuffled_{reference_TTL}'
         for i in range(n_iterations):
 
             # A sort of do/while loop here. Only exit the loop if a mean_signal is generated that will fit in self.shuffle_means 
@@ -811,8 +824,8 @@ class sig_processing_object(object):
                 
                 # Select the random timestamps and align the data.
                 rand_ttls = random.sample(list(self.timestamps), n_ttls)
-                self.ttl_starts = rand_ttls
-                self.align_to_TTLs(baseline_time = baseline_time, epoch_time=epoch_time, signal_to_slice=signal_to_slice)
+                self.ttl_starts[shuffled_ttl_name] = rand_ttls
+                self.align_to_TTLs(baseline_time = baseline_time, reference_TTL = shuffled_ttl_name, epoch_time=epoch_time, signal_to_slice=signal_to_slice)
 
                 # Take the average and check whether it looks good.
                 mean_signal = np.nanmean(self.trial_data, axis=0)
@@ -829,5 +842,4 @@ class sig_processing_object(object):
 
                 
         # Before exiting the function, re-align the data to the true TTLs. 
-        self.ttl_starts = self.true_ttls.copy()
-        self.align_to_TTLs(baseline_time = baseline_time, epoch_time=epoch_time, signal_to_slice=signal_to_slice)
+        self.align_to_TTLs(baseline_time = baseline_time, reference_TTL = reference_TTL, epoch_time=epoch_time, signal_to_slice=signal_to_slice)
