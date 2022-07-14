@@ -34,7 +34,10 @@
 #                now take the desired TTL as a keyword argument, with TTL_1 as the default. 
 #                THIS IS A BREAKING CHANGE FROM THE OLD WAY OF HANDLING TTLS. 
 #                2.0.0
-__version__='2.0.0'
+# July 14, 2022: Debugging new arguments. Fixed incorrect single-line, multiple-error catching in shuffle_align. Fixed incorrect calculation of first TTL
+#				 time in identify_ttls when (1.) Data have been dropped during __init__ and (2.) The first TTL starts in the first frame of the new dataframe.
+#				 2.0.1
+__version__='2.0.1'
 
 
 
@@ -692,7 +695,14 @@ class sig_processing_object(object):
 
             switch_points = np.diff(self.input_data_frame.loc[:, ttl_ch], prepend=0)
 
-            ttl_starts = np.where(switch_points==1)
+            ttl_starts, = np.where(switch_points==1)
+            # Brief corner-case check:
+            if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
+            	ttl_starts[0] = self.input_data_frame.index[0]
+            	# In the event that data have been dropped from the beginning of the file and 
+            	# a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
+            	# will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
+
             self.ttl_starts[ttl_ch] = self.input_data_frame.loc[ttl_starts, 'Time'].values
 
         if len(self.ttl_starts) == 0:
@@ -799,7 +809,7 @@ class sig_processing_object(object):
         '''
         try:
             n_ttls = self.ttl_starts[reference_TTL].size
-        except AttributeError, KeyError as e:
+        except (AttributeError, KeyError) as e:
             # If the provided reference TTL has not yet been identified, ask user to run identify_ttls.
             raise Exception(f"You can't shuffle the data based on {reference_TTL} without having run identify_TTLs for {reference_TTL}. Run identify_TTLs first.")
 
@@ -807,7 +817,7 @@ class sig_processing_object(object):
         #    close to either end of the trial)
         try:
             bins = self.trial_data[reference_TTL].shape[1]
-        except AttributeError, KeyError as e:
+        except (AttributeError, KeyError) as e:
             raise Exception(f"I'm not going to let you run these shuffles before generating trial_data for {reference_TTL}. Why risk guessing the bin size? Run align_to_TTLs and then try again.") from e           
 
         # Now generate the shuffled data.
