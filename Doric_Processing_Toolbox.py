@@ -35,9 +35,11 @@
 #                THIS IS A BREAKING CHANGE FROM THE OLD WAY OF HANDLING TTLS. 
 #                2.0.0
 # July 14, 2022: Debugging new arguments. Fixed incorrect single-line, multiple-error catching in shuffle_align. Fixed incorrect calculation of first TTL
-#				 time in identify_ttls when (1.) Data have been dropped during __init__ and (2.) The first TTL starts in the first frame of the new dataframe.
-#				 2.0.1
-__version__='2.0.1'
+#                time in identify_ttls when (1.) Data have been dropped during __init__ and (2.) The first TTL starts in the first frame of the new dataframe.
+#                2.0.1
+# Sept 1, 2022:  Updated calc_robust_z to identify and handle arrays as input. 
+#                2.0.2
+__version__='2.0.2'
 
 
 
@@ -194,7 +196,7 @@ def bidirectional_trap_sum(y, x):
 def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
     '''
         Calculates a Robust Median Z scaled to the standard normal distribution relative to a specified window (none by default).
-        param input_signal:               Raw input signal to transform (must be np.array())
+        param input_signal:               Raw input signal to transform (must be np.array() and may be either 1 or 2 dimensional)
         params ref_start_idx,ref_end_idx: The indices of the window on which to base the median/MAD calculation. Full signal by default. 
         return normalized_signal:         Median z-scaled signal
     '''
@@ -202,10 +204,18 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
     if ref_end_idx == 'end':
         ref_end_idx = input_signal.size
 
-    med = np.median(input_signal[ref_start_idx:ref_end_idx])
-    MAD = np.median(abs(input_signal[ref_start_idx:ref_end_idx]-med))*1.4826
-    normalized_signal = (input_signal - med) / MAD   
+    # If 1 dimensional array, calculation is simple.
+    if input_signal.shape.size == 1:
+        med = np.median(input_signal[ref_start_idx:ref_end_idx])
+        MAD = np.median(abs(input_signal[ref_start_idx:ref_end_idx]-med))*1.4826
+        normalized_signal = (input_signal - med) / MAD   
 
+    # If 2 dimensional array, perform the calculation simultaneously for each row independently. 
+    elif input_signal.shape.size == 2:
+        med = np.median(input_signal[:, ref_start_idx:ref_end_idx], axis=1).reshape([-1, 1])
+        MAD = np.median(abs(input_signal[:, ref_start_idx:ref_end_idx] - bl_med))*1.4826
+
+    normalized_signal = (input_signal - med) / MAD
     return normalized_signal
 
 
@@ -698,10 +708,10 @@ class sig_processing_object(object):
             ttl_starts, = np.where(switch_points==1)
             # Brief corner-case check:
             if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
-            	ttl_starts[0] = self.input_data_frame.index[0]
-            	# In the event that data have been dropped from the beginning of the file and 
-            	# a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
-            	# will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
+                ttl_starts[0] = self.input_data_frame.index[0]
+                # In the event that data have been dropped from the beginning of the file and 
+                # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
+                # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
 
             self.ttl_starts[ttl_ch] = self.input_data_frame.loc[ttl_starts, 'Time'].values
 
