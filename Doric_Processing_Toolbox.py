@@ -205,15 +205,15 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
         ref_end_idx = input_signal.size
 
     # If 1 dimensional array, calculation is simple.
-    if input_signal.shape.size == 1:
+    if len(input_signal.shape) == 1:
         med = np.median(input_signal[ref_start_idx:ref_end_idx])
         MAD = np.median(abs(input_signal[ref_start_idx:ref_end_idx]-med))*1.4826
         normalized_signal = (input_signal - med) / MAD   
 
     # If 2 dimensional array, perform the calculation simultaneously for each row independently. 
-    elif input_signal.shape.size == 2:
+    elif len(input_signal.shape) == 2:
         med = np.median(input_signal[:, ref_start_idx:ref_end_idx], axis=1).reshape([-1, 1])
-        MAD = np.median(abs(input_signal[:, ref_start_idx:ref_end_idx] - bl_med))*1.4826
+        MAD = np.median(abs(input_signal[:, ref_start_idx:ref_end_idx] - med))*1.4826
 
     normalized_signal = (input_signal - med) / MAD
     return normalized_signal
