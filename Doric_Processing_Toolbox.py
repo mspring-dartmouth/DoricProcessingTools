@@ -44,7 +44,11 @@
 #               and the data will be more or less processed according to the previous steps from there. 
 #               Unrelated to the above, I also added the ability to bypass the sliding window in DFF z normalization. 
 #               2.1.0
-__version__='2.1.0'
+# Sep 28, 2022: Debugged identify_ttls. It ran into trouble when checking for missing data if one of the TTLs was empty.
+#				Some of the artifact removal defaults were based on a fixed sampling rate of 12 kSpS. The new software allows this to be modified. 
+#				As such, this process was made dynamic, and a step was added to ensure that the added buffer doesn't go past the end of the timestamps. 
+#				2.1.1
+__version__='2.1.1'
 
 
 
@@ -296,8 +300,8 @@ class sig_processing_object(object):
                 # with identifying information in the key. 
 
                 # Time (seconds) in col 1
-                raw_excitation_file = pd.read_csv(input_file['Exc'], index_col=1, error_bad_lines=False, warn_bad_lines=True)
-                raw_isobestic_file = pd.read_csv(input_file['Iso'], index_col=1, error_bad_lines=False, warn_bad_lines=True)
+                raw_excitation_file = pd.read_csv(input_file['Exc'], index_col='Time', error_bad_lines=False, warn_bad_lines=True)
+                raw_isobestic_file = pd.read_csv(input_file['Iso'], index_col='Time', error_bad_lines=False, warn_bad_lines=True)
                 # Time in Col 0, but leave it as a column
                 raw_TTL_file = pd.read_csv(input_file['TTLs'], error_bad_lines=False, warn_bad_lines=True)
 
@@ -347,9 +351,11 @@ class sig_processing_object(object):
 
             # The doric system introduces a strange artifact every ~937 seconds in which the signal on both channels cuts out. 
             # Remove these artifacts. 
+            
+            artifact_buffer = int(4 * self.sampling_rate / 1000) # Yields number of frames in ~4 ms. 
             if remove_artifacts:
-                self.remove_artifacts(reference_channel='Isosbestic', threshold=-10)
-                self.remove_artifacts(reference_channel='Signal', threshold=-15)
+                self.remove_artifacts(reference_channel='Isosbestic', threshold=-10, buffer_size = artifact_buffer)
+                self.remove_artifacts(reference_channel='Signal', threshold=-15, buffer_size = artifact_buffer)
                 # Occasionally, I will note that a clear artifact occurs only in the signal channel. As such, filtering should occur using
                 # both channels as the references, but we will be more stringent using the Signal channel as the reference. 
 
@@ -531,7 +537,12 @@ class sig_processing_object(object):
         art_start = np.where(switch_points==1)[0]-buffer_size
         art_end = np.where(switch_points==-1)[0]+buffer_size
         # N.B. The size of this step relative to the signal changes depending on the sampling rate of the file. 
-        # With the default sampling rate of 12k Hz, the default buffer_size of 50 frames should be about 4.1667 ms. 
+        # The default buffer_size of 50 frames was set based on the default sampling rate of the Doric systems (12 kSpS)
+        # to create a time buffer of approximately 4.1667 ms. 
+
+        # Check that the last end-point + the buffer isn't past the end of the existing timestamps
+        if art_end.size > 0 and art_end[-1] >= self.timestamps.size:
+        	art_end[-1] = self.timestamps.size-1
 
 
         # Directly remove artifacts from signal and isosbestic
@@ -768,12 +779,14 @@ class sig_processing_object(object):
             switch_points = np.diff(self.input_data_frame.loc[:, ttl_ch], prepend=0)
 
             ttl_starts, = np.where(switch_points==1)
-            # Brief corner-case check:
-            if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
-                ttl_starts[0] = self.input_data_frame.index[0]
-                # In the event that data have been dropped from the beginning of the file and 
-                # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
-                # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
+            
+            if ttl_starts.size > 0:
+	            # Brief corner-case check:
+	            if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
+	                ttl_starts[0] = self.input_data_frame.index[0]
+	                # In the event that data have been dropped from the beginning of the file and 
+	                # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
+	                # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
 
             self.ttl_starts[ttl_ch] = self.input_data_frame.loc[ttl_starts, 'Time'].values
 
