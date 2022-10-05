@@ -48,7 +48,11 @@
 #				Some of the artifact removal defaults were based on a fixed sampling rate of 12 kSpS. The new software allows this to be modified. 
 #				As such, this process was made dynamic, and a step was added to ensure that the added buffer doesn't go past the end of the timestamps. 
 #				2.1.1
-__version__='2.1.1'
+# Oct 04, 2022: Doric provides a set of functions built on the h5py package so that .doric files can be read directly. The multiple file handling has
+#               been replaced with these functions. However, the structure of processing .csv vs. an alternate that was introduced in 2.1.0 remains helpful
+#               so, instead of creating a new branch the hpy5 functionality is simply being added here. 
+#               2.2.0
+__version__='2.2.0'
 
 
 
@@ -60,6 +64,8 @@ import seaborn as sb
 from scipy import signal
 import random
 import pickle as pkl
+
+import doric as dr # A set of functions written and provided by Doric. 
 
 
 ###
@@ -221,8 +227,8 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
 
     # If 2 dimensional array, perform the calculation simultaneously for each row independently. 
     elif len(input_signal.shape) == 2:
-        med = np.median(input_signal[:, ref_start_idx:ref_end_idx], axis=1).reshape([-1, 1])
-        MAD = np.median(abs(input_signal[:, ref_start_idx:ref_end_idx] - med))*1.4826
+        med = np.nanmedian(input_signal[:, ref_start_idx:ref_end_idx], axis=1).reshape([-1, 1])
+        MAD = np.nanmedian(abs(input_signal[:, ref_start_idx:ref_end_idx] - med))*1.4826
 
     normalized_signal = (input_signal - med) / MAD
     return normalized_signal
@@ -232,7 +238,7 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
 
 # TODO: Comment __init__ function and class more generally. 
 class sig_processing_object(object):
-    def __init__(self, input_file, single_input = True, remove_artifacts=True, from_pickle=False):
+    def __init__(self, input_file, remove_artifacts=True, from_pickle=False):
         '''
 
         '''
@@ -245,7 +251,7 @@ class sig_processing_object(object):
             self.signal_processing_log = []
             self.trial_data = {} # This will be used in align_to_TTLs to store TTL aligned data.
 
-            if single_input:
+            if '.csv' in input_file:
                 self.input_data_frame = pd.read_csv(input_file, skiprows=1, error_bad_lines=False, warn_bad_lines=True)
                 
                 # Purge extraneous columns
@@ -295,52 +301,47 @@ class sig_processing_object(object):
                 self.isosbestic = self.input_data_frame.Isosbestic.values
 
 
-            elif not single_input:
-                # If the raw data are spread across multiple input files, the file names will appear as values in an input dictionary,
-                # with identifying information in the key. 
+            elif '.doric' in input_file:
+                # If the raw data are in an HDF5 binary file, a different set of processing steps is required. 
 
-                # Time (seconds) in col 1
-                raw_excitation_file = pd.read_csv(input_file['Exc'], index_col='Time', error_bad_lines=False, warn_bad_lines=True)
-                raw_isobestic_file = pd.read_csv(input_file['Iso'], index_col='Time', error_bad_lines=False, warn_bad_lines=True)
-                # Time in Col 0, but leave it as a column
-                raw_TTL_file = pd.read_csv(input_file['TTLs'], error_bad_lines=False, warn_bad_lines=True)
+                self.signal, exc_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT01-LockIn', 'Values'])
+                exc_time, exc_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT01-LockIn', 'Time'])
 
-                # Check that the excitation and isosbestic files have roughly the same time-stamps before continuing.
-                # As long as they are within 1/100th of a second, it shouldn't make difference. You don't have 10 ms resolution
-                # with anything you're doing anyway.
-                if (abs(raw_excitation_file.index - raw_isobestic_file.index)<0.01).all():
-                    self.timestamps = raw_excitation_file.index
+
+                self.isosbestic, iso_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Values'])
+                iso_time, iso_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Time'])
+
+                if (abs(exc_time - iso_time)<0.01).all():
+                    self.timestamps = exc_time
                     self.sampling_rate = 1/np.diff(self.timestamps).mean()
-                    
-                    # 'Values' is the name of the column in which the actual signal is stored.
-                    self.signal = raw_excitation_file.Values.values
-                    self.isosbestic = raw_isobestic_file.Values.values
                 else:
                     raise Exception('Excitation and Isosbestic Timestamps not aligned. Check your data.')
                 
 
+
                 # identify_TTLs will look for an attribute named self.input_data_frame and select only the TTLs. 
                 # Put the TTL data in that format for simplicity's sake. 
                 
-                # Purge empty columns
-                raw_TTL_file.dropna(axis=1, inplace=True)
-                # Rename columns (DIO0X --> TTL_X)
-                new_col_names = ['Time']
-                try:
-                    new_col_names.extend(f'TTL_{x[3:]}' for x in raw_TTL_file.columns[1:])
-                except IndexError:
-                    # If there are no TTLs, raw_TTL_file.columns[1] will be out of range. 
-                    # identify_TTLs will handle it. 
-                    print('No TTLs. Skipping column renaming.')
+                ttl_time, ttl_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'DigitalIO', 'Time'])
 
-                raw_TTL_file.columns = new_col_names
-                # Create self.input_data_frame just because. 
-                self.input_data_frame = raw_TTL_file.copy()
+                self.input_data_frame = pd.DataFrame(index=range(ttl_time.size), columns=['Time', 'TTL_01', 'TTL_02', 'TTL_03', 'TTL_04'])
 
-                # Avoid memory issues
-                del raw_excitation_file
-                del raw_isobestic_file
-                del raw_TTL_file
+                self.input_data_frame.loc[:, 'Time'] = ttl_time.copy()
+
+                for ttl_num in range(1, 5):
+                    try:
+                        raw_data, inf =  dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'DigitalIO', f'DIO0{ttl_num}'])
+                        self.input_data_frame.loc[:, f'TTL_0{ttl_num}'] = raw_data.copy()
+                    except KeyError:
+                        print(f'{input_file} has no TTL {ttl_num}.')
+                        break
+
+                # Now get rid of any empty columns
+                self.input_data_frame.dropna(axis=1, inplace=True)
+                
+                # Delete a few things that are duplicated to preserve memory
+                del ttl_time
+                del raw_data
 
 
             # Delete the input data frame to avoid memory issues
