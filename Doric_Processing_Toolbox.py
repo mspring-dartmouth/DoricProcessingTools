@@ -26,20 +26,33 @@
 #               1.2.0
 # May 26, 2022: Tweaked id_transients() to handle when first event begins at very beginning of session. 
 #               1.2.1
-# June 14, 2022: Updated initial file reading in signal_processing_object.__init__ to support skipping bad lines. Note that the syntax for 
-#                this function is updated in pandas 1.3.0 and above. I'm currently running 1.2.1 (coincidentally), so I've used the old syntax
+# Jun 14, 2022: Updated initial file reading in signal_processing_object.__init__ to support skipping bad lines. Note that the syntax for 
+#               this function is updated in pandas 1.3.0 and above. I'm currently running 1.2.1 (coincidentally), so I've used the old syntax
 #               1.2.2
-# June 28, 2022: Edited __init__, identify_TTLs, align_to_TTLs, and shuffle_align methods in signal_processing_object to work with multiple TTLs. 
-#                all ttl associated data are now stored in a dictionary, associated with key "TTL_1", "TTL_2", ... etc. The latter 3 methods also
-#                now take the desired TTL as a keyword argument, with TTL_1 as the default. 
-#                THIS IS A BREAKING CHANGE FROM THE OLD WAY OF HANDLING TTLS. 
-#                2.0.0
-# July 14, 2022: Debugging new arguments. Fixed incorrect single-line, multiple-error catching in shuffle_align. Fixed incorrect calculation of first TTL
-#                time in identify_ttls when (1.) Data have been dropped during __init__ and (2.) The first TTL starts in the first frame of the new dataframe.
-#                2.0.1
-# Sept 1, 2022:  Updated calc_robust_z to identify and handle arrays as input. 
-#                2.0.2
-__version__='2.0.2'
+# Jun 28, 2022: Edited __init__, identify_TTLs, align_to_TTLs, and shuffle_align methods in signal_processing_object to work with multiple TTLs. 
+#               all ttl associated data are now stored in a dictionary, associated with key "TTL_1", "TTL_2", ... etc. The latter 3 methods also
+#               now take the desired TTL as a keyword argument, with TTL_1 as the default. 
+#               THIS IS A BREAKING CHANGE FROM THE OLD WAY OF HANDLING TTLS. 
+#               2.0.0
+# Jul 14, 2022: Debugging new arguments. Fixed incorrect single-line, multiple-error catching in shuffle_align. Fixed incorrect calculation of first TTL
+#               time in identify_ttls when (1.) Data have been dropped during __init__ and (2.) The first TTL starts in the first frame of the new dataframe.
+#               2.0.1
+# Sep 01, 2022: Updated calc_robust_z to identify and handle arrays as input. 
+#               2.0.2
+# Sep 23, 2022: Added handling of data spread across multiple input files. signal_processing_object.__init__() now has a new boolean variable "single_input"
+#               that is set to a default value of True. If multiple files are passed as a dictionary in place of input_file, single_input should be set to False
+#               and the data will be more or less processed according to the previous steps from there. 
+#               Unrelated to the above, I also added the ability to bypass the sliding window in DFF z normalization. 
+#               2.1.0
+# Sep 28, 2022: Debugged identify_ttls. It ran into trouble when checking for missing data if one of the TTLs was empty.
+#				Some of the artifact removal defaults were based on a fixed sampling rate of 12 kSpS. The new software allows this to be modified. 
+#				As such, this process was made dynamic, and a step was added to ensure that the added buffer doesn't go past the end of the timestamps. 
+#				2.1.1
+# Oct 04, 2022: Doric provides a set of functions built on the h5py package so that .doric files can be read directly. The multiple file handling has
+#               been replaced with these functions. However, the structure of processing .csv vs. an alternate that was introduced in 2.1.0 remains helpful
+#               so, instead of creating a new branch the hpy5 functionality is simply being added here. 
+#               2.2.0
+__version__='2.2.0'
 
 
 
@@ -51,6 +64,8 @@ import seaborn as sb
 from scipy import signal
 import random
 import pickle as pkl
+
+import doric as dr # A set of functions written and provided by Doric. 
 
 
 ###
@@ -212,8 +227,8 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
 
     # If 2 dimensional array, perform the calculation simultaneously for each row independently. 
     elif len(input_signal.shape) == 2:
-        med = np.median(input_signal[:, ref_start_idx:ref_end_idx], axis=1).reshape([-1, 1])
-        MAD = np.median(abs(input_signal[:, ref_start_idx:ref_end_idx] - med))*1.4826
+        med = np.nanmedian(input_signal[:, ref_start_idx:ref_end_idx], axis=1).reshape([-1, 1])
+        MAD = np.nanmedian(abs(input_signal[:, ref_start_idx:ref_end_idx] - med))*1.4826
 
     normalized_signal = (input_signal - med) / MAD
     return normalized_signal
@@ -224,6 +239,134 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
 # TODO: Comment __init__ function and class more generally. 
 class sig_processing_object(object):
     def __init__(self, input_file, remove_artifacts=True, from_pickle=False):
+        '''
+
+        '''
+
+
+        # INITIATE FROM RAW DATA
+       
+        if not from_pickle:
+            # These two are used in the same way regardless of input format. 
+            self.signal_processing_log = []
+            self.trial_data = {} # This will be used in align_to_TTLs to store TTL aligned data.
+
+            if '.csv' in input_file:
+                self.input_data_frame = pd.read_csv(input_file, skiprows=1, error_bad_lines=False, warn_bad_lines=True)
+                
+                # Purge extraneous columns
+                # AOut-1/2 are just the sin functions corresponding to the LED driver.
+                for col in ['AOut-1', 'AOut-2']:
+                    if col in self.input_data_frame.columns:
+                        self.input_data_frame.drop(col, axis=1, inplace=True)
+                # Occasionally, empty columns will be picked up. They are named "Unnamed: X", where X is the column number
+                unnamed_col_locs = ['Unnamed' in i for i in self.input_data_frame.columns]
+                unnamed_col_ids = self.input_data_frame.columns[unnamed_col_locs]
+                self.input_data_frame.drop(unnamed_col_ids, axis=1, inplace=True)
+
+                # Now rename columns to something more recognizable.
+                input_file_col_names = {'Time(s)': 'Time', 
+                                        'AIn-1 - Dem (AOut-1)': 'Signal',
+                                        'AIn-1 - Dem (AOut-2)': 'Isosbestic',
+                                        'AIn-1 - Raw': 'TotalRaw',
+                                        'DI/O-1': 'TTL_1',
+                                        'DI/O-2': 'TTL_2',
+                                        'DI/O-3': 'TTL_3',
+                                        'DI/O-4': 'TTL_4'}
+                try:
+                    new_col_names = [input_file_col_names[n] for n in self.input_data_frame.columns]
+                except KeyError:
+                    print('Not all column names were found in renaming dictionary.')
+                    new_col_names = []
+                    # If the columns can't be renamed in one go, then you'll just have to do it iteratively.
+                    for old_col_name in self.input_data_frame.columns:
+                        # If the column name is one of the ones you expected, change it to the standard.
+                        if old_col_name in input_file_col_names.keys():
+                            new_col_names.append(input_file_col_names[old_col_name])
+                        # Otherwise, just leave it untouched, and let the user know.
+                        else:
+                            print(f'{old_col_name} not found in input_file_col_names.')
+                            new_col_names.append(old_col_name)
+
+                for old_name, new_name in zip(self.input_data_frame.columns, new_col_names):
+                    print(f'{old_name}-->{new_name}')   
+                self.input_data_frame.columns = new_col_names
+                # Remove any rows with missing data.
+                self.input_data_frame.dropna(how='any', inplace=True)
+
+                # Set up attributes.
+                self.sampling_rate = 1/np.diff(self.input_data_frame.Time).mean()
+                self.timestamps = self.input_data_frame.Time.values
+                self.signal = self.input_data_frame.Signal.values
+                self.isosbestic = self.input_data_frame.Isosbestic.values
+
+
+            elif '.doric' in input_file:
+                # If the raw data are in an HDF5 binary file, a different set of processing steps is required. 
+
+                self.signal, exc_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT01-LockIn', 'Values'])
+                exc_time, exc_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT01-LockIn', 'Time'])
+
+
+                self.isosbestic, iso_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Values'])
+                iso_time, iso_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Time'])
+
+                if (abs(exc_time - iso_time)<0.01).all():
+                    self.timestamps = exc_time
+                    self.sampling_rate = 1/np.diff(self.timestamps).mean()
+                else:
+                    raise Exception('Excitation and Isosbestic Timestamps not aligned. Check your data.')
+                
+
+
+                # identify_TTLs will look for an attribute named self.input_data_frame and select only the TTLs. 
+                # Put the TTL data in that format for simplicity's sake. 
+                
+                ttl_time, ttl_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'DigitalIO', 'Time'])
+
+                self.input_data_frame = pd.DataFrame(index=range(ttl_time.size), columns=['Time', 'TTL_01', 'TTL_02', 'TTL_03', 'TTL_04'])
+
+                self.input_data_frame.loc[:, 'Time'] = ttl_time.copy()
+
+                for ttl_num in range(1, 5):
+                    try:
+                        raw_data, inf =  dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'DigitalIO', f'DIO0{ttl_num}'])
+                        self.input_data_frame.loc[:, f'TTL_0{ttl_num}'] = raw_data.copy()
+                    except KeyError:
+                        print(f'{input_file} has no TTL {ttl_num}.')
+                        break
+
+                # Now get rid of any empty columns
+                self.input_data_frame.dropna(axis=1, inplace=True)
+                
+                # Delete a few things that are duplicated to preserve memory
+                del ttl_time
+                del raw_data
+
+
+            # Delete the input data frame to avoid memory issues
+            # Capitalize on greater temporal specificity of raw input for calculating TTL times before doing so. 
+            self.identify_TTLs()
+            # If there are no TTLs, this will simply create an empty dictionary named self.ttl_starts.
+            del self.input_data_frame
+
+            # The doric system introduces a strange artifact every ~937 seconds in which the signal on both channels cuts out. 
+            # Remove these artifacts. 
+            
+            artifact_buffer = int(4 * self.sampling_rate / 1000) # Yields number of frames in ~4 ms. 
+            if remove_artifacts:
+                self.remove_artifacts(reference_channel='Isosbestic', threshold=-10, buffer_size = artifact_buffer)
+                self.remove_artifacts(reference_channel='Signal', threshold=-15, buffer_size = artifact_buffer)
+                # Occasionally, I will note that a clear artifact occurs only in the signal channel. As such, filtering should occur using
+                # both channels as the references, but we will be more stringent using the Signal channel as the reference. 
+
+            # Apply lowpass butterworth filter to isosbestic channel.   
+            self.isosbestic = butter_lowpass_filter(self.isosbestic, 40, self.sampling_rate/2, order=4)
+            self.signal_processing_log.append(f'Butterworth lowpass filter (40Hz) applied to isosbestic channel.')
+            # By performing this step here, you can apply whatever downsample you want to the processed data, because 
+            # the isosbestic will not have to be refiltered.  
+        
+
         # INITIATE FROM PICKLED SPO
         if from_pickle:
             # Load the file:
@@ -253,82 +396,6 @@ class sig_processing_object(object):
             for attribute_name, attribute_value in input_spo.__dict__.items():
                 self.__dict__[attribute_name] = attribute_value
 
-
-        # INITIATE FROM RAW DATA
-        else:
-            self.input_data_frame = pd.read_csv(input_file, skiprows=1, error_bad_lines=False, warn_bad_lines=True)
-            
-            # Purge extraneous columns
-            # AOut-1/2 are just the sin functions corresponding to the LED driver.
-            for col in ['AOut-1', 'AOut-2']:
-                if col in self.input_data_frame.columns:
-                    self.input_data_frame.drop(col, axis=1, inplace=True)
-            # Occasionally, empty columns will be picked up. They are named "Unnamed: X", where X is the column number
-            unnamed_col_locs = ['Unnamed' in i for i in self.input_data_frame.columns]
-            unnamed_col_ids = self.input_data_frame.columns[unnamed_col_locs]
-            self.input_data_frame.drop(unnamed_col_ids, axis=1, inplace=True)
-
-            # Now rename columns to something more recognizable.
-            input_file_col_names = {'Time(s)': 'Time', 
-                                    'AIn-1 - Dem (AOut-1)': 'Signal',
-                                    'AIn-1 - Dem (AOut-2)': 'Isosbestic',
-                                    'AIn-1 - Raw': 'TotalRaw',
-                                    'DI/O-1': 'TTL_1',
-                                    'DI/O-2': 'TTL_2',
-                                    'DI/O-3': 'TTL_3',
-                                    'DI/O-4': 'TTL_4'}
-            try:
-                new_col_names = [input_file_col_names[n] for n in self.input_data_frame.columns]
-            except KeyError:
-                print('Not all column names were found in renaming dictionary.')
-                new_col_names = []
-                # If the columns can't be renamed in one go, then you'll just have to do it iteratively.
-                for old_col_name in self.input_data_frame.columns:
-                    # If the column name is one of the ones you expected, change it to the standard.
-                    if old_col_name in input_file_col_names.keys():
-                        new_col_names.append(input_file_col_names[old_col_name])
-                    # Otherwise, just leave it untouched, and let the user know.
-                    else:
-                        print(f'{old_col_name} not found in input_file_col_names.')
-                        new_col_names.append(old_col_name)
-
-            for old_name, new_name in zip(self.input_data_frame.columns, new_col_names):
-                print(f'{old_name}-->{new_name}')   
-            self.input_data_frame.columns = new_col_names
-
-            # Remove any rows with missing data.
-            self.input_data_frame.dropna(how='any', inplace=True)
-
-            # Set up attributes.
-            self.sampling_rate = 1/np.diff(self.input_data_frame.Time).mean()
-            self.signal_processing_log = []
-            self.timestamps = self.input_data_frame.Time.values
-            self.signal = self.input_data_frame.Signal.values
-            self.isosbestic = self.input_data_frame.Isosbestic.values
-            self.trial_data = {} # This will be used in align_to_TTLs to store TTL aligned data.
-
-            # The doric system introduces a strange artifact every ~937 seconds in which the signal on both channels cuts out. 
-            # Remove these artifacts. 
-            if remove_artifacts:
-                self.remove_artifacts(reference_channel='Isosbestic', threshold=-10)
-                self.remove_artifacts(reference_channel='Signal', threshold=-15)
-                # Occasionally, I will note that a clear artifact occurs only in the signal channel. As such, filtering should occur using
-                # both channels as the references, but we will be more stringent using the Signal channel as the reference. 
-
-            # To avoid memory issues, it helps to delete the input data frame
-
-            # However, I prefer the greater temporal specificity offered by the raw input for calculating TTL times. 
-            # As such, try to run identify_TTLs first. 
-            self.identify_TTLs()
-            # If there are no TTLs, this will simply create an empty dictionary named self.ttl_starts.
-            del self.input_data_frame
-
-            # Apply lowpass butterworth filter to isosbestic channel.   
-            self.isosbestic = butter_lowpass_filter(self.isosbestic, 40, self.sampling_rate/2, order=4)
-            self.signal_processing_log.append(f'Butterworth lowpass filter (40Hz) applied to isosbestic channel.')
-            # By performing this step here, you can apply whatever downsample you want to the processed data, because 
-            # the isosbestic will not have to be refiltered.  
-           
         # Track the version number.  
         self.__version__ = __version__
 
@@ -400,7 +467,9 @@ class sig_processing_object(object):
             create self.normalized_signal:     robust z normalized DeltaF/F
             return self.signal_processing_log: list containing a record of processing steps so far applied to the data.
         '''
-
+        if normalization_window_size == 'None':
+            normalization_window_size = self.timestamps[-1] - self.timestamps[0]
+        
         # Convert window size into a chunk of indices using the internal sampling rate (samples/second).
         average_window_step_size = int(normalization_window_size*self.sampling_rate)
         
@@ -469,7 +538,12 @@ class sig_processing_object(object):
         art_start = np.where(switch_points==1)[0]-buffer_size
         art_end = np.where(switch_points==-1)[0]+buffer_size
         # N.B. The size of this step relative to the signal changes depending on the sampling rate of the file. 
-        # With the default sampling rate of 12k Hz, the default buffer_size of 50 frames should be about 4.1667 ms. 
+        # The default buffer_size of 50 frames was set based on the default sampling rate of the Doric systems (12 kSpS)
+        # to create a time buffer of approximately 4.1667 ms. 
+
+        # Check that the last end-point + the buffer isn't past the end of the existing timestamps
+        if art_end.size > 0 and art_end[-1] >= self.timestamps.size:
+        	art_end[-1] = self.timestamps.size-1
 
 
         # Directly remove artifacts from signal and isosbestic
@@ -706,12 +780,14 @@ class sig_processing_object(object):
             switch_points = np.diff(self.input_data_frame.loc[:, ttl_ch], prepend=0)
 
             ttl_starts, = np.where(switch_points==1)
-            # Brief corner-case check:
-            if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
-                ttl_starts[0] = self.input_data_frame.index[0]
-                # In the event that data have been dropped from the beginning of the file and 
-                # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
-                # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
+            
+            if ttl_starts.size > 0:
+	            # Brief corner-case check:
+	            if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
+	                ttl_starts[0] = self.input_data_frame.index[0]
+	                # In the event that data have been dropped from the beginning of the file and 
+	                # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
+	                # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
 
             self.ttl_starts[ttl_ch] = self.input_data_frame.loc[ttl_starts, 'Time'].values
 
