@@ -52,7 +52,11 @@
 #               been replaced with these functions. However, the structure of processing .csv vs. an alternate that was introduced in 2.1.0 remains helpful
 #               so, instead of creating a new branch the hpy5 functionality is simply being added here. 
 #               2.2.0
-__version__='2.2.0'
+# Oct 13, 2022: DeltaFF calculation was incorrect. The calculation of the "fitted isosbestic" was erroneously using the excitation signal instead of the isosbestic.
+#				Thus, the deltaFF was, essentially, the 465 relative to itself. This has been corrected. 
+# 				Also changed default normalization window in z_norm_deltaff to None. 
+#				2.2.1
+__version__='2.2.1'
 
 
 
@@ -448,7 +452,7 @@ class sig_processing_object(object):
 
         # Fit isosbestic channel to signal channel using linear fit.
         fit_coefs = np.polyfit(self.isosbestic, self.signal, 1)
-        self.fitted_isobestic = (fit_coefs[0] * self.signal) + fit_coefs[1]
+        self.fitted_isobestic = (fit_coefs[0] * self.isosbestic) + fit_coefs[1]
 
         self.signal_processing_log.append('Linear fit applied to isosbestic channel.')
 
@@ -459,7 +463,7 @@ class sig_processing_object(object):
         return self.signal_processing_log
 
         
-    def z_norm_deltaff(self, normalization_window_size = 40):
+    def z_norm_deltaff(self, normalization_window_size = 'None'):
         '''
             Convert DeltaF/F to Robust Z scores based on a sliding window. 
             param  self:                       attributes of signal_processing_object
