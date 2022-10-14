@@ -54,7 +54,7 @@
 #               2.2.0
 # Oct 13, 2022: DeltaFF calculation was incorrect. The calculation of the "fitted isosbestic" was erroneously using the excitation signal instead of the isosbestic.
 #				Thus, the deltaFF was, essentially, the 465 relative to itself. This has been corrected. 
-# 				Also changed default normalization window in z_norm_deltaff to None. 
+# 				Also changed default normalization window in z_norm_deltaff to None. A few minor modifications to the syntax of calc_robust_z. Cosmetic.  
 #				2.2.1
 __version__='2.2.1'
 
@@ -225,9 +225,8 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
 
     # If 1 dimensional array, calculation is simple.
     if len(input_signal.shape) == 1:
-        med = np.median(input_signal[ref_start_idx:ref_end_idx])
-        MAD = np.median(abs(input_signal[ref_start_idx:ref_end_idx]-med))*1.4826
-        normalized_signal = (input_signal - med) / MAD   
+        med = np.nanmedian(input_signal[ref_start_idx:ref_end_idx])
+        MAD = np.nanmedian(abs(input_signal[ref_start_idx:ref_end_idx]-med))*1.4826
 
     # If 2 dimensional array, perform the calculation simultaneously for each row independently. 
     elif len(input_signal.shape) == 2:
