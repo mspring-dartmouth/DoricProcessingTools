@@ -45,18 +45,21 @@
 #               Unrelated to the above, I also added the ability to bypass the sliding window in DFF z normalization. 
 #               2.1.0
 # Sep 28, 2022: Debugged identify_ttls. It ran into trouble when checking for missing data if one of the TTLs was empty.
-#				Some of the artifact removal defaults were based on a fixed sampling rate of 12 kSpS. The new software allows this to be modified. 
-#				As such, this process was made dynamic, and a step was added to ensure that the added buffer doesn't go past the end of the timestamps. 
-#				2.1.1
+#               Some of the artifact removal defaults were based on a fixed sampling rate of 12 kSpS. The new software allows this to be modified. 
+#               As such, this process was made dynamic, and a step was added to ensure that the added buffer doesn't go past the end of the timestamps. 
+#               2.1.1
 # Oct 04, 2022: Doric provides a set of functions built on the h5py package so that .doric files can be read directly. The multiple file handling has
 #               been replaced with these functions. However, the structure of processing .csv vs. an alternate that was introduced in 2.1.0 remains helpful
 #               so, instead of creating a new branch the hpy5 functionality is simply being added here. 
 #               2.2.0
 # Oct 13, 2022: DeltaFF calculation was incorrect. The calculation of the "fitted isosbestic" was erroneously using the excitation signal instead of the isosbestic.
-#				Thus, the deltaFF was, essentially, the 465 relative to itself. This has been corrected. 
-# 				Also changed default normalization window in z_norm_deltaff to None. A few minor modifications to the syntax of calc_robust_z. Cosmetic.  
-#				2.2.1
-__version__='2.2.1'
+#               Thus, the deltaFF was, essentially, the 465 relative to itself. This has been corrected. 
+#               Also changed default normalization window in z_norm_deltaff to None. A few minor modifications to the syntax of calc_robust_z. Cosmetic.  
+#               2.2.1
+# Oct 14, 2022: Finished updating shuffle_align. Changed default reference TTL from "TTL_1" to "TTL_01" and removed re-alignment from end. With ttl_starts
+#               as dictionary, re-alignment is not necessary. align_to_ttls was wonky as well. Identifying the zero-index was simplified. 
+#               2.2.2
+__version__='2.2.2'
 
 
 
@@ -546,7 +549,7 @@ class sig_processing_object(object):
 
         # Check that the last end-point + the buffer isn't past the end of the existing timestamps
         if art_end.size > 0 and art_end[-1] >= self.timestamps.size:
-        	art_end[-1] = self.timestamps.size-1
+            art_end[-1] = self.timestamps.size-1
 
 
         # Directly remove artifacts from signal and isosbestic
@@ -785,12 +788,12 @@ class sig_processing_object(object):
             ttl_starts, = np.where(switch_points==1)
             
             if ttl_starts.size > 0:
-	            # Brief corner-case check:
-	            if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
-	                ttl_starts[0] = self.input_data_frame.index[0]
-	                # In the event that data have been dropped from the beginning of the file and 
-	                # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
-	                # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
+                # Brief corner-case check:
+                if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
+                    ttl_starts[0] = self.input_data_frame.index[0]
+                    # In the event that data have been dropped from the beginning of the file and 
+                    # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
+                    # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
 
             self.ttl_starts[ttl_ch] = self.input_data_frame.loc[ttl_starts, 'Time'].values
 
@@ -802,7 +805,7 @@ class sig_processing_object(object):
         self.signal_processing_log.append(log_txt)
 
 
-    def align_to_TTLs(self, reference_TTL = 'TTL_1', baseline_time = 10, epoch_time = 10, signal_to_slice='Z_Signal'):
+    def align_to_TTLs(self, reference_TTL = 'TTL_01', baseline_time = 10, epoch_time = 10, signal_to_slice='Z_Signal'):
         # Determine number of bins to devote to baseline.
         n_baseline_bins = int(baseline_time * self.sampling_rate)
         # The next frame after n_baseline_bins is where we want to ensure that our 0 ends up in all slices. 
@@ -840,18 +843,18 @@ class sig_processing_object(object):
             # In all likelihood, these timestamps will be a little offset from what we want. 
             # Calculate the current offset. 
 
-            # How do we get the current zero index when we're working from the padded signal? We can start off by getting signal closest to TTL: 
-            time_closest_to_zero = timestamps[np.argmin(abs(timestamps - time))]
-            sig_at_zero = self.processed_dataframe.loc[time_closest_to_zero, signal_to_slice]
+            # I don't remember what any of this was.
+            # # How do we get the current zero index when we're working from the padded signal? We can start off by getting signal closest to TTL: 
+            # time_closest_to_zero = timestamps[np.argmin(abs(timestamps - time))]
+            # sig_at_zero = self.processed_dataframe.loc[time_closest_to_zero, signal_to_slice]
+            # # Now we know the value of the signal at 0. 
+            # # We don't know for sure that 0 is the only time that the signal is at this value. So, we grab all instances, and their timestamps
+            # zero_candidate_indices, = np.where(padded_signal==sig_at_zero)
+            # if zero_candidate_indices.size>1:
+               #  zero_candidates_timestamps = self.processed_dataframe[self.processed_dataframe[signal_to_slice]==sig_at_zero].index
+               #  current_zero_index = zero_candidate_indices[np.where(zero_candidates_timestamps==time_closest_to_zero)[0]][0]            
 
-            # Now we know the value of the signal at 0. 
-
-            # We don't know for sure that 0 is the only time that the signal is at this value. So, we grab all instances, and their timestamps
-            zero_candidate_indices = np.where(padded_signal==sig_at_zero)[0]
-            zero_candidates_timestamps = self.processed_dataframe[self.processed_dataframe[signal_to_slice]==sig_at_zero].index
-            
-
-            current_zero_index = zero_candidate_indices[np.where(zero_candidates_timestamps==time_closest_to_zero)[0]][0]            
+            current_zero_index = np.argmin(abs(timestamps-time))
 
             zero_offset = target_zero_index - current_zero_index # Distance of the above from where we want it. 
                 # The sign of zero_offset will indicate the necessary direction of the frame shift. 
@@ -883,7 +886,7 @@ class sig_processing_object(object):
             self.trial_data[reference_TTL][i] = np.delete(s, range(min_slice_length, s.size))
 
 
-    def shuffle_align(self, reference_TTL = 'TTL_1', n_iterations = 1000, baseline_time = 10, epoch_time=10, signal_to_slice='Z_Signal'):
+    def shuffle_align(self, reference_TTL = 'TTL_01', n_iterations = 1000, baseline_time = 10, epoch_time=10, signal_to_slice='Z_Signal'):
         ''' 
             This function will randomly select a number of timepoints equivalent to the number of TTLs registered
             and apply align_to_ttls to those timepoints. It will compute and store the average trace generated by this procedure. 
@@ -927,7 +930,7 @@ class sig_processing_object(object):
                 self.align_to_TTLs(baseline_time = baseline_time, reference_TTL = shuffled_ttl_name, epoch_time=epoch_time, signal_to_slice=signal_to_slice)
 
                 # Take the average and check whether it looks good.
-                mean_signal = np.nanmean(self.trial_data, axis=0)
+                mean_signal = np.nanmean(self.trial_data[shuffled_ttl_name], axis=0)
                 if mean_signal.size < bins:
                     # Try the procedure again if the data aren't the right size
                     generate_ttls = True
@@ -938,7 +941,3 @@ class sig_processing_object(object):
             # Store the data
             normed = calc_robust_z(mean_signal) 
             self.shuffle_means[i] = normed[:bins]
-
-                
-        # Before exiting the function, re-align the data to the true TTLs. 
-        self.align_to_TTLs(baseline_time = baseline_time, reference_TTL = reference_TTL, epoch_time=epoch_time, signal_to_slice=signal_to_slice)
