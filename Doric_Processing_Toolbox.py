@@ -59,7 +59,11 @@
 # Oct 14, 2022: Finished updating shuffle_align. Changed default reference TTL from "TTL_1" to "TTL_01" and removed re-alignment from end. With ttl_starts
 #               as dictionary, re-alignment is not necessary. align_to_ttls was wonky as well. Identifying the zero-index was simplified. 
 #               2.2.2
-__version__='2.2.2'
+# Nov 08, 2022: There is occasionally a small amount of drift between the timestamps for the isosbestic and excitation signal. I had placed the tolerance threshold
+#				for that at 0.01 seconds, but that was arbitrary. I encountered a data file that drifted 0.012 seconds by the end, so I've bumped the tolerance up to 
+#				0.05 seconds. This is also arbitrary. 
+#				2.2.3
+__version__='2.2.3'
 
 
 
@@ -317,7 +321,7 @@ class sig_processing_object(object):
                 self.isosbestic, iso_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Values'])
                 iso_time, iso_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Time'])
 
-                if (abs(exc_time - iso_time)<0.01).all():
+                if (abs(exc_time - iso_time)<0.05).all():
                     self.timestamps = exc_time
                     self.sampling_rate = 1/np.diff(self.timestamps).mean()
                 else:
