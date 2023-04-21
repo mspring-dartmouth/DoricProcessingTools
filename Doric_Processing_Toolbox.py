@@ -486,9 +486,9 @@ class sig_processing_object(object):
         '''
 
         ## Calculates the 5th percentile of 10-second bins in the 465 signal. 
-        window_size = int(self.sampling_rate * 10)
-
+        
         # The length of the signal will not be perfectly divisible by ten, so need to calculate where the overflow is. 
+        window_size = int(self.sampling_rate * 10)
         last_bin = (self.signal.size // window_size) * window_size
         
         # Then calculate the 5th percentile for 10 second increments + the remainder. 
@@ -497,9 +497,9 @@ class sig_processing_object(object):
         
         # Determine timestamps for window starts for linear fit.
         
-        n_seconds = last_bin / 10
+        n_seconds = last_bin / 10   
         last_time = (self.signal.size - last_bin) / 10
-        x_vals = np.arange(0, n_seconds, 10)
+        x_vals = np.linspace(0, n_seconds, fifth_percentile.size-1)
         x_vals = np.append(x_vals, x_vals[-1]+last_time)
 
 
