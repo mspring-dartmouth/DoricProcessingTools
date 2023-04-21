@@ -60,13 +60,13 @@
 #               as dictionary, re-alignment is not necessary. align_to_ttls was wonky as well. Identifying the zero-index was simplified. 
 #               2.2.2
 # Nov 08, 2022: There is occasionally a small amount of drift between the timestamps for the isosbestic and excitation signal. I had placed the tolerance threshold
-#				for that at 0.01 seconds, but that was arbitrary. I encountered a data file that drifted 0.012 seconds by the end, so I've bumped the tolerance up to 
-#				0.05 seconds. This is also arbitrary. 
-#				2.2.3
+#               for that at 0.01 seconds, but that was arbitrary. I encountered a data file that drifted 0.012 seconds by the end, so I've bumped the tolerance up to 
+#               0.05 seconds. This is also arbitrary. 
+#               2.2.3
 # Apr 10, 2023: Incorporated alternate method for calculated dF/F based on 5th percentile. New function name: calc_dff_from_percentile. Previous function (calc_dff)
-#				RENAMED to calc_dff_from_isosbestic. I wouldn't consider this a breaking change because existing data structures aren't modified, 
-#				but existing scripts will have to be adjusted. 
-#				2.3.0
+#               RENAMED to calc_dff_from_isosbestic. I wouldn't consider this a breaking change because existing data structures aren't modified, 
+#               but existing scripts will have to be adjusted. 
+#               2.3.0
 __version__='2.3.0'
 
 
@@ -474,47 +474,47 @@ class sig_processing_object(object):
 
      
     def calc_dff_from_percentile(self):
-    	'''
-			A function for calcuating the DeltaF/F using an alternate, isosbestic free method. 
-			This method is based on Krok et al. in BioRxiv https://doi.org/10.1101/2022.09.09.507300
+        '''
+            A function for calcuating the DeltaF/F using an alternate, isosbestic free method. 
+            This method is based on Krok et al. in BioRxiv https://doi.org/10.1101/2022.09.09.507300
 
-			This function calculates the fifth-percentile of the signal in a 10 second sliding window, calculates a linear fit for the 5th percentile, 
-			then uses this fitted line as F0 in the formula dFF = (F-F0) / F0, where F=465 signal. 
+            This function calculates the fifth-percentile of the signal in a 10 second sliding window, calculates a linear fit for the 5th percentile, 
+            then uses this fitted line as F0 in the formula dFF = (F-F0) / F0, where F=465 signal. 
                param   self:                       current attributes of the signal_processing_object
                create  self.dff:                   array containing excitation signal normalized relative to the filtered and fitted isosbestic 
                return  self.signal_processing_log: list containing a record of processing steps so far applied to the data.
-    	'''
+        '''
 
-	    ## Calculates the 5th percentile of 10-second bins in the 465 signal. 
-	    window_size = int(self.sampling_rate * 10)
+        ## Calculates the 5th percentile of 10-second bins in the 465 signal. 
+        window_size = int(self.sampling_rate * 10)
 
-	    # The length of the signal will not be perfectly divisible by ten, so need to calculate where the overflow is. 
-	    last_bin = (self.signal.size // window_size) * window_size
-	    
-	    # Then calculate the 5th percentile for 10 second increments + the remainder. 
-	    fifth_percentile = np.percentile(self.signal[:last_bin].reshape([-1, window_size]), 5, axis=1)
-	    fifth_percentile = np.append(fifth_percentile, np.percentile(self.signal[last_bin:], 5))
-	    
-	    # Determine timestamps for window starts for linear fit.
-	    
-	    n_seconds = last_bin / 10
-	    last_time = (self.signal.size - last_bin) / 10
-	    x_vals = np.arange(0, n_seconds, 10)
-	    x_vals = np.append(x_vals, x_vals[-1]+last_time)
+        # The length of the signal will not be perfectly divisible by ten, so need to calculate where the overflow is. 
+        last_bin = (self.signal.size // window_size) * window_size
+        
+        # Then calculate the 5th percentile for 10 second increments + the remainder. 
+        fifth_percentile = np.percentile(self.signal[:last_bin].reshape([-1, window_size]), 5, axis=1)
+        fifth_percentile = np.append(fifth_percentile, np.percentile(self.signal[last_bin:], 5))
+        
+        # Determine timestamps for window starts for linear fit.
+        
+        n_seconds = last_bin / 10
+        last_time = (self.signal.size - last_bin) / 10
+        x_vals = np.arange(0, n_seconds, 10)
+        x_vals = np.append(x_vals, x_vals[-1]+last_time)
 
 
-	    # Calculate coefficents and create function for linear fit from the calculated timestamps and percentiles.
-	    fit_coeffs = np.polyfit(x_vals, fifth_percentile ,1)
-	    fit_func = np.poly1d(fit_coeffs)
+        # Calculate coefficents and create function for linear fit from the calculated timestamps and percentiles.
+        fit_coeffs = np.polyfit(x_vals, fifth_percentile ,1)
+        fit_func = np.poly1d(fit_coeffs)
 
-	    # Generate a curve fitted to the 5th percentile that is the same length as self.signal. 
-	    F0 = f(self.timestamps)
-	    
-	    # Calculate the DeltaF / F. 
+        # Generate a curve fitted to the 5th percentile that is the same length as self.signal. 
+        F0 = fit_func(self.timestamps)
+        
+        # Calculate the DeltaF / F. 
         self.dff = (self.signal - F0) / F0
         self.signal_processing_log.append(r'deltaF/F calculated based on 5th percentile.')
 
-	    return self.dff
+        return self.dff
 
     def z_norm_deltaff(self, normalization_window_size = 'None'):
         '''
