@@ -71,9 +71,11 @@
 #				it was determined that attempting to use a monototonic linear fit to the 5th percentile is hugely distortionary and simply a bad idea. It has been altered
 #				so that the 5th percentile itself in sliding 10s windows is used as F0. 
 #				2.3.1
-# Jun 9, 2023: Added input variables to calc_dff_from_percentile to enable user to set window size and reference percentile. Defaults are 10s and 5%. 
+# Jun 9, 2023: 	Added input variables to calc_dff_from_percentile to enable user to set window size and reference percentile. Defaults are 10s and 5%. 
 #				2.3.2
-__version__='2.3.2'
+# Jun 12, 2023: Addressed corner case in calc_dff_from_percentile in which the length of the signal actually was perfectly divisible by the chosen window length.
+#				2.3.3 
+__version__='2.3.3'
 
 
 
@@ -499,7 +501,7 @@ class sig_processing_object(object):
 		bin_size = int(self.sampling_rate * seconds)
 		last_bin = (self.signal.size // bin_size) * bin_size
 		
-		# Reshape signal so that it is X rows of 10s columns:
+		# Reshape signal so that it is n rows of X second columns:
 		main_sig_array = self.signal[:last_bin].reshape([-1, bin_size])
 		remainder_sig = self.signal[last_bin:]
 
@@ -507,7 +509,11 @@ class sig_processing_object(object):
 		# Main
 		sig_percentile = np.percentile(main_sig_array, ref_percentile, axis=1).reshape([-1, 1])
 		# Remainder
-		sig_percentile_remainder = np.percentile(remainder_sig, ref_percentile)
+		try:
+			sig_percentile_remainder = np.percentile(remainder_sig, ref_percentile)
+		except IndexError:
+			print(f'Remarkably, the signal length ({self.signal.size}) is perfectly divisible by the bin size ({bin_size}).')
+			sig_percentile_remainder = np.array([])
 
 		#Calculate dFF for both main and remainder:
 		main_dff = (main_sig_array - sig_percentile) / sig_percentile
