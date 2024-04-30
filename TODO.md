@@ -12,6 +12,7 @@ A set of functions for analyzing fiber-photometry output from Doric Neuroscience
 - [ ] Create __init__ files. 
 - [ ] Create requirements file. 
 - [ ] Create .gitignore to screen out .pyc files before installing DPT to system. 
+- [ ] Incorporate Erica's interpolation function. 
 
 ### Doing
 
