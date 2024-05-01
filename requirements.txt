@@ -1,0 +1,8 @@
+pandas
+numpy
+warnings
+seaborn
+scipy
+pickle
+random
+h5py
