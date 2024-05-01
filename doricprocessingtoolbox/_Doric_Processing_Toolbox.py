@@ -1,3 +1,6 @@
+__version__ = '2.5.0'
+
+
 import pandas as pd
 import numpy as np
 import warnings
