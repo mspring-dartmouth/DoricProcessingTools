@@ -6,7 +6,7 @@ from scipy import signal
 import random
 import pickle as pkl
 
-import _doric as dr # A set of functions written and provided by Doric. 
+from ._doric import h5read # A set of functions written and provided by Doric. 
 
 
 ###
@@ -174,6 +174,24 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
     return normalized_signal
 
 
+class RenamingUnpickler(pkl.Unpickler):
+    '''
+        Pickles created prior to the implementation of a pip installable version of this module
+        were created under a different name. In changing the name, the old pickles become unreadable
+        by a system expecting to find doricprocessingtoolbox instead of Doric_Processing_Toolbox.
+        This is an adaptation of the base pkl.Unpickler class in which the find_class function has been
+        modified to fix the issue above.
+
+        If pd.read_pickle(pkl) throws a ModuleNoteFound error when trying to load an older pickle, 
+        attempt to load it using RenamingUnpickler(pkl).load() instead. 
+    '''
+    def find_class(self, module, name):
+        if module == 'Doric_Processing_Toolbox':
+            module = 'doricprocessingtoolbox'
+        return super().find_class(module, name)
+
+
+
 # SIGNAL PROCESSING OBJECT CLASS
 
 # TODO: Comment __init__ function and class more generally. 
@@ -244,12 +262,12 @@ class sig_processing_object(object):
             elif '.doric' in input_file:
                 # If the raw data are in an HDF5 binary file, a different set of processing steps is required. 
 
-                self.signal, exc_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT01-LockIn', 'Values'])
-                exc_time, exc_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT01-LockIn', 'Time'])
+                self.signal, exc_info = h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT01-LockIn', 'Values'])
+                exc_time, exc_time_info = h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT01-LockIn', 'Time'])
 
 
-                self.isosbestic, iso_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Values'])
-                iso_time, iso_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Time'])
+                self.isosbestic, iso_info = h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Values'])
+                iso_time, iso_time_info = h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'AIN01xAOUT02-LockIn', 'Time'])
 
                 if (abs(exc_time - iso_time)<0.05).all():
                     self.timestamps = exc_time
@@ -262,7 +280,7 @@ class sig_processing_object(object):
                 # identify_TTLs will look for an attribute named self.input_data_frame and select only the TTLs. 
                 # Put the TTL data in that format for simplicity's sake. 
                 
-                ttl_time, ttl_time_info = dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'DigitalIO', 'Time'])
+                ttl_time, ttl_time_info = h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'DigitalIO', 'Time'])
 
                 self.input_data_frame = pd.DataFrame(index=range(ttl_time.size), columns=['Time', 'TTL_01', 'TTL_02', 'TTL_03', 'TTL_04'])
 
@@ -270,7 +288,7 @@ class sig_processing_object(object):
 
                 for ttl_num in range(1, 5):
                     try:
-                        raw_data, inf =  dr.h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'DigitalIO', f'DIO0{ttl_num}'])
+                        raw_data, inf =  h5read(input_file, ['DataAcquisition', 'FPConsole', 'Signals', 'Series0001', 'DigitalIO', f'DIO0{ttl_num}'])
                         self.input_data_frame.loc[:, f'TTL_0{ttl_num}'] = raw_data.copy()
                     except KeyError:
                         print(f'{input_file} has no TTL {ttl_num}.')
