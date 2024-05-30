@@ -1,11 +1,11 @@
-__version__ = '2.5.0'
+__version__ = '2.6.0'
 
 
 import pandas as pd
 import numpy as np
 import warnings
 import seaborn as sb
-from scipy import signal
+from scipy import signal, optimize
 import random
 import pickle as pkl
 
@@ -32,6 +32,19 @@ def butter_lowpass_filter(data, cutoff_freq, nyq_freq, order=4):
     b, a = butter_lowpass(cutoff_freq, nyq_freq, order=order)
     y = signal.filtfilt(b, a, data)
     return y
+
+def dbl_decay(params, y0, plat, x_vals):
+    kfast, kslow, percent_fast = params
+    span_fast = (y0-plat)*percent_fast
+    span_slow = (y0-plat)*(1-percent_fast)
+    Y = plat + span_fast*np.exp(-1*kfast*x_vals) + span_slow*np.exp(-1*kslow*x_vals)
+    return Y
+    
+def fit_decay_double(params, y0, plat, true_y, x_vals):
+    fitted_y = dbl_decay(params, y0, plat, x_vals)
+    rss = np.sum((true_y-fitted_y)**2)
+    return rss
+
 
 def trap_sum(y, x):
     firstPointIDX = 0
@@ -332,8 +345,11 @@ class sig_processing_object(object):
         if from_pickle:
             # Load the file:
             with open(input_file, 'rb') as in_file:
-                input_spo = pd.read_pickle(in_file)
-
+                try:
+                    input_spo = pd.read_pickle(in_file)
+                except ModuleNotFoundError:
+                    in_file.seek(0)
+                    input_spo = RenamingUnpickler(in_file).load()
             # VERSION CHECKING
             try: 
                 major_version, minor_version, patch_version = input_spo.__version__.split('.')
@@ -394,6 +410,10 @@ class sig_processing_object(object):
         return self.signal_processing_log
 
 
+    def filter_signals(self):
+        # Future versions will want to implement this in cases where desired downsampling yields a sampling rate > 20 Hz. 
+        # Signals above 10 Hz should be filtered out of everything, regardless of sampling rate. 
+        pass
 
     # Fit the processed isosbestic signal was fitted to the excitation signal using a linear fit to correct for signal decay. 
     def calc_dff_from_isosbestic(self):
@@ -461,8 +481,47 @@ class sig_processing_object(object):
         # Combine body and tail. 
         self.dff = np.append(main_dff.reshape([1, -1]), remainder_dff.reshape([1, -1]))
 
-        self.signal_processing_log.append(r'deltaF/F calculated based on 5th percentile in 10s windows.')
+        self.signal_processing_log.append(f'deltaF/F calculated based on {ref_percentile}th percentile in {seconds}s windows.')
 
+
+        return self.signal_processing_log
+
+    def detrend_photobleaching(self):
+
+        # Fit two-phsae decay curve to signal
+        intercept, plateau = np.median(self.signal[:int(self.sampling_rate)+1]), np.min(self.signal)
+        sig_fit = optimize.minimize(fit_decay_double, x0=[0.1, 0.001, 0.2], args=(intercept, plateau, self.signal, self.timestamps), method='Nelder-Mead')
+        
+        # Fit two-phsae decay curve to isosbestic
+        iso_intercept, iso_plateau = np.median(self.isosbestic[:int(self.sampling_rate)+1]), np.min(self.isosbestic)
+        iso_fit = optimize.minimize(fit_decay_double, x0=sig_fit['x'], args=(iso_intercept, iso_plateau, self.isosbestic, self.timestamps), method='Nelder-Mead')
+             
+        # Subtract decay curves from both signals. 
+        self.detrended_sig = self.signal-dbl_decay(sig_fit['x'], intercept, plateau, self.timestamps)
+        self.detrended_iso = self.isosbestic-dbl_decay(iso_fit['x'], iso_intercept, iso_plateau, self.timestamps)
+      
+        self.signal_processing_log.append('Signal and isosbestic detrended according to individual two-phase decay curves.')
+
+        return self.signal_processing_log
+
+    def correct_movement(self):
+        try:
+            coefs = np.polyfit(self.detrended_iso, self.detrended_sig, 1)
+        except AttributeError as e:
+            raise Exception('detrend_photobleaching() must be run prior to movement correction.') from e
+
+        # Estimate motion over course of session based on isosbestic. 
+        est_motion = coefs[1] + coefs[0] * self.detrended_iso
+
+        # Correct GRAB signal by subtracting estimated motion from detrended signal. 
+        self.motion_corrected_signal = self.detrended_sig - est_motion
+
+        self.signal_processing_log.append('Motion component of signal estimated based on linear fit and removed from detrended signal.')
+
+        # For compatability with existing functions:
+        self.dff = self.motion_corrected_signal
+        # Obviously, the motion corrected signal is NOT in units of DeltaF/F, and this hack will be repaired in future versions. 
+        # For now, I just want to be able to implement the detrend + motion correct with existing save files and existing functions. 
 
         return self.signal_processing_log
 
