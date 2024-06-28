@@ -1,3 +1,5 @@
+#### Version 2.6.1 ####
+	- Implemented a general signal filtering function within sig_processing_object (filter_signals). 
 #### Version 2.6.0 ####
 	- Added new pre-processing functionality: two-phase decay function based detrending to correct for photobleaching and an isosbestic based motion correction (which is fundamentally similar to the previous approach for DFF calculation that was based on the fitted isosbestic). This will be the standard analysis pipeline going forward. sig_processing_object is messy, and outdated functions relating to DFF calculations will be removed in future versions. Backwards compatability to with existing pickles that are built around calculating and analyzing "self.dff" is maintained for now, but will break with version 3.x.
 #### Version 2.5.0 ####

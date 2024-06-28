@@ -1,4 +1,4 @@
-__version__ = '2.6.0'
+__version__ = '2.6.1'
 
 
 import pandas as pd
@@ -410,10 +410,23 @@ class sig_processing_object(object):
         return self.signal_processing_log
 
 
-    def filter_signals(self):
-        # Future versions will want to implement this in cases where desired downsampling yields a sampling rate > 20 Hz. 
-        # Signals above 10 Hz should be filtered out of everything, regardless of sampling rate. 
-        pass
+    def filter_signals(self, filtering_threshold=10, order=4):
+        '''
+			Applies a 4th order 10Hz (by default) low-pass butterworth filter to the isosbestic and excitation channels. 
+			:param self: current attributes of the signal_processing_object
+			:param filtering_threshold: the maximum Hz to permit in the signal.
+			:param order: the filter order to use. Higher orders sacrifice accuracy for steeper drop-offs after the cut-off. 4 seems a good balance. 
+        ''' 
+        self.isosbestic = butter_lowpass_filter(self.isosbestic, filtering_threshold, self.sampling_rate/2, order=order)
+        self.signal = butter_lowpass_filter(self.signal, filtering_threshold, self.sampling_rate/2, order=order)
+        self.signal_processing_log.append(f'{order}th order Butterworth lowpass filter ({filtering_threshold}Hz) applied to isosbestic and signal channels.')
+
+
+        if hasattr(self, 'processed_dataframe'):
+            warnings.warn('Raw traces have been filtered. Detrending, movement correction, and normalization must be re-executed.')
+
+
+        return self.signal_processing_log
 
     # Fit the processed isosbestic signal was fitted to the excitation signal using a linear fit to correct for signal decay. 
     def calc_dff_from_isosbestic(self):
