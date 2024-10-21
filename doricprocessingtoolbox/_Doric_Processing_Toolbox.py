@@ -16,6 +16,11 @@ from ._doric import h5read # A set of functions written and provided by Doric.
 # AUXILIARY FUNCTIONS
 ###
 
+def docs():
+    reminder = ''' The processing pipline is as follows:'''
+
+    print(reminder)
+
 def butter_lowpass(cutoff, nyq_freq, order=4):
     if float(cutoff)/nyq_freq >= 1.0:
         warnings.warn(f'Target cutoff frequency ({cutoff}) for lowpass filter exceeds signal nyquist frequency ({nyq_freq}).\n\
@@ -212,9 +217,12 @@ class RenamingUnpickler(pkl.Unpickler):
 
 # TODO: Comment __init__ function and class more generally. 
 class sig_processing_object(object):
-    def __init__(self, input_file, remove_artifacts=True, from_pickle=False):
+    def __init__(self, input_file, remove_artifacts=True, from_pickle=False, store_full_TTLs=False):
         '''
-
+        :param input_file:
+        :param remove_artifacts:
+        :param from_pickle:
+        :param store_full_TTLs: Toggle whether to create dataframe self.full_ttls in addition to just self.ttl_starts
         '''
 
 
@@ -320,7 +328,7 @@ class sig_processing_object(object):
 
             # Delete the input data frame to avoid memory issues
             # Capitalize on greater temporal specificity of raw input for calculating TTL times before doing so. 
-            self.identify_TTLs()
+            self.identify_TTLs(store_full=store_full_TTLs)
             # If there are no TTLs, this will simply create an empty dictionary named self.ttl_starts.
             del self.input_data_frame
 
@@ -374,7 +382,7 @@ class sig_processing_object(object):
                 self.__dict__[attribute_name] = attribute_value
 
         # Track the version number.  
-        self.__version__ = __version__
+        self.__version__ = __version__        
 
     def downsample_signal(self, downsample_factor):
         
@@ -851,10 +859,15 @@ class sig_processing_object(object):
             raise RuntimeError
 
     # TODO Comment these.
-    def identify_TTLs(self):
-        ttl_channels = filter(lambda x: 'TTL_' in x, self.input_data_frame.columns)
+    def identify_TTLs(self, store_full=False):
+        ttl_channels = list(filter(lambda x: 'TTL_' in x, self.input_data_frame.columns))
 
         self.ttl_starts = {}
+
+        if store_full:
+            self.full_ttls = self.input_data_frame.loc[:, ttl_channels]
+            self.full_ttls.index = self.input_data_frame.loc[:, 'Time']
+
         for ttl_ch in ttl_channels:
 
             switch_points = np.diff(self.input_data_frame.loc[:, ttl_ch], prepend=0)
