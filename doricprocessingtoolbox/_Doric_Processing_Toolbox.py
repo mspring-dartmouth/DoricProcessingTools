@@ -1,4 +1,4 @@
-__version__ = '2.6.0'
+__version__ = '3.0.0'
 
 
 import pandas as pd
@@ -17,11 +17,25 @@ from ._doric import h5read # A set of functions written and provided by Doric.
 ###
 
 def docs():
-    reminder = ''' The processing pipline is as follows:'''
-
+    reminder = ''' The processing pipline is as follows:
+    signal_processing_object.downsample_signal() ---> Target ~100 Hz. 
+    signal_processing_object.filter_signals()    ---> Applies 10Hz lowpass. 
+    signal_processing_object.detrend_photobleaching()
+    signal_processing_object.correct_movement()
+    signal_processing_object.z_norm_signal()
+    signal_processing_object.create_dataframe()
+                '''
     print(reminder)
 
 def butter_lowpass(cutoff, nyq_freq, order=4):
+    '''
+        Determines the features of a unidirectional lowpass butterworth filter. This serves as a helper function for the bidirectional filter below.
+        :param cutoff: Cutoff frequency for filter. 
+        :param nyq_freq: Nyquist frequency of input signal.
+        :param order: Filter order. Default = 4
+        :return (b, a): Numerator (b) and denominator (a) polynomials of the IIR filter
+    '''
+
     if float(cutoff)/nyq_freq >= 1.0:
         warnings.warn(f'Target cutoff frequency ({cutoff}) for lowpass filter exceeds signal nyquist frequency ({nyq_freq}).\n\
                         Cutoff frequency will be set to nyquist frequency - 1 {nyq_freq-1}.')
@@ -33,12 +47,34 @@ def butter_lowpass(cutoff, nyq_freq, order=4):
     return b, a
 
 def butter_lowpass_filter(data, cutoff_freq, nyq_freq, order=4):
-    # Source: https://github.com/guillaume-chevalier/filtering-stft-and-laplace-transform
+    '''
+        Source: https://github.com/guillaume-chevalier/filtering-stft-and-laplace-transform
+        Applies bidirectional butterworth lowpass filter to an input signal. 
+        :param data:        input signal.
+        :param cutoff_freq: target cutoff frequency. 
+        :param nyq_freq:    Nyquis frequncy of input signal. 
+        :param order:       Filter order. Default = 4. 
+        :return y:          Filtered signal. 
+
+    '''
     b, a = butter_lowpass(cutoff_freq, nyq_freq, order=order)
     y = signal.filtfilt(b, a, data)
     return y
 
 def dbl_decay(params, y0, plat, x_vals):
+    '''
+        Creates a double decay curve based on decay constants, fast/slow proportion, y-intercept, and signal plateau.
+        :param params: Tuple containing kfast, kslow, and percent_fast
+                kfast: decay constant of fast component. 
+                kslow: decay constant of slow component.
+         percent_fast: Percent of decay that is the fast component. 
+        :param y0:     Y-intercept
+        :param plat:   Asymptote of decay curve. 
+        :param x_vals: X values to use in generation of curve. 
+
+        :return Y: Y values of the double decay curve. 
+
+    '''
     kfast, kslow, percent_fast = params
     span_fast = (y0-plat)*percent_fast
     span_slow = (y0-plat)*(1-percent_fast)
@@ -46,12 +82,31 @@ def dbl_decay(params, y0, plat, x_vals):
     return Y
     
 def fit_decay_double(params, y0, plat, true_y, x_vals):
+    '''
+        Calculates RSS between fitted double decay curve and real Y values.
+        :param params: Tuple containing kfast, kslow, and percent_fast
+                kfast: decay constant of fast component. 
+                kslow: decay constant of slow component.
+         percent_fast: Percent of decay that is the fast component. 
+        :param y0:     Y-intercept
+        :param plat:   Asymptote of decay curve. 
+        :param true_y: Real Y values against which fitted curve is being compared. 
+        :param x_vals: X values corresponding to input true_y values and used in generation of curve. 
+    
+        :return rss: Residual sums of squares for true_y vs. fitted_y. 
+    '''
     fitted_y = dbl_decay(params, y0, plat, x_vals)
     rss = np.sum((true_y-fitted_y)**2)
     return rss
 
-
 def trap_sum(y, x):
+    '''
+        Unidirectional area between curve and origin calculator. 
+        param y: list-like containing y-values.
+        param x: list-like containing x-values.
+        return AUC:  Absolute area under the curve (as float).
+    '''
+
     firstPointIDX = 0
     secondPointIDX = 1
     AUC = 0
@@ -169,7 +224,6 @@ def bidirectional_trap_sum(y, x):
     # "Sign" and sum all AUCs to calculate final value.
     return sum(np.array(windowAUCs)*np.array(windowSigns))
 
-
 def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
     '''
         Calculates a Robust Median Z scaled to the standard normal distribution relative to a specified window (none by default).
@@ -194,7 +248,6 @@ def calc_robust_z(input_signal, ref_start_idx = 0, ref_end_idx = 'end'):
     normalized_signal = (input_signal - med) / MAD
     return normalized_signal
 
-
 class RenamingUnpickler(pkl.Unpickler):
     '''
         Pickles created prior to the implementation of a pip installable version of this module
@@ -211,21 +264,22 @@ class RenamingUnpickler(pkl.Unpickler):
             module = 'doricprocessingtoolbox'
         return super().find_class(module, name)
 
-
-
 # SIGNAL PROCESSING OBJECT CLASS
-
-# TODO: Comment __init__ function and class more generally. 
 class sig_processing_object(object):
     def __init__(self, input_file, remove_artifacts=True, from_pickle=False, store_full_TTLs=False):
         '''
+        Reads in raw file and performs various initial processing steps, including running remove_artifacts and identify_ttls.
         :param input_file:
         :param remove_artifacts:
         :param from_pickle:
         :param store_full_TTLs: Toggle whether to create dataframe self.full_ttls in addition to just self.ttl_starts
+        :create self.signal:
+        :create self.isosbestic:
+        :create self.timestamps:
+        :create self.sampling_rate:
+        :create self.signal_processing_log:
+        :create self.trial_data:
         '''
-
-
         # INITIATE FROM RAW DATA
        
         if not from_pickle:
@@ -384,198 +438,6 @@ class sig_processing_object(object):
         # Track the version number.  
         self.__version__ = __version__        
 
-    def downsample_signal(self, downsample_factor):
-        
-        #Prior to downsampling, determine target sampling rate and apply anti-aliasing filter.
-        target_sampling_rate = self.sampling_rate / downsample_factor
-        new_nyq = target_sampling_rate/2
-
-        # Apply filter to signal and isosbestic to remove all frequencies above the nyquist frequency of the downsampled sampling rate.
-        self.signal = butter_lowpass_filter(self.signal, new_nyq, self.sampling_rate/2)
-        self.isosbestic = butter_lowpass_filter(self.isosbestic, new_nyq, self.sampling_rate/2)
-        
-        self.signal_processing_log.append(f'{new_nyq}Hz anti-aliasing filter applied to Signal and Isosbestic.')
-        
-        downsampler_index = np.arange(0, self.signal.size, downsample_factor)
-
-        self.timestamps = self.timestamps[downsampler_index]
-        self.signal = self.signal[downsampler_index]
-        self.isosbestic = self.isosbestic[downsampler_index]
-
-
-        if 'deltaF/F calculated.' in self.signal_processing_log:
-            warnings.warn(f'Input data downsampled. Re-calculate DFF.')
-            try:
-                del self.processed_dataframe
-                self.signal_processing_log.append('self.processed_dataframe removed following downsampling.')
-            except AttributeError:
-                pass
-
-
-
-        self.signal_processing_log.append(f'Signal downsampled by a factor of {downsample_factor}. {self.sampling_rate}-->{target_sampling_rate}')
-        self.sampling_rate = target_sampling_rate
-        return self.signal_processing_log
-
-
-    def filter_signals(self):
-        # Future versions will want to implement this in cases where desired downsampling yields a sampling rate > 20 Hz. 
-        # Signals above 10 Hz should be filtered out of everything, regardless of sampling rate. 
-        pass
-
-    # Fit the processed isosbestic signal was fitted to the excitation signal using a linear fit to correct for signal decay. 
-    def calc_dff_from_isosbestic(self):
-        '''
-            A function for calculating the DeltaF/F based on the isosbestic. See Lerner et al. (2015) Cell. 10.1016/j.cell.2015.07.014. 
-
-            This function filters the isosbestic channel, fits it to the signal channel, and then calculates dF/F from the fit.
-                param   self:                       current attributes of the signal_processing_object
-                create  self.fitted_isosbestic:     array containing filtered isosbestic with linear fit applied
-                create  self.dff:                   array containing excitation signal normalized relative to the filtered and fitted isosbestic 
-                return  self.signal_processing_log: list containing a record of processing steps so far applied to the data.
-        '''
-
-        # Fit isosbestic channel to signal channel using linear fit.
-        fit_coefs = np.polyfit(self.isosbestic, self.signal, 1)
-        self.fitted_isobestic = (fit_coefs[0] * self.isosbestic) + fit_coefs[1]
-
-        self.signal_processing_log.append('Linear fit applied to isosbestic channel.')
-
-        # Calculate the DeltaF / F. 
-        self.dff = (self.signal - self.fitted_isobestic) / self.fitted_isobestic
-        self.signal_processing_log.append(r'deltaF/F calculated based on isosbestic.')
-
-        return self.signal_processing_log
-
-     
-    def calc_dff_from_percentile(self, seconds=10, ref_percentile=5):
-        '''
-            A function for calcuating the DeltaF/F using an alternate, isosbestic free method. 
-            This method is based on Krok et al. in BioRxiv https://doi.org/10.1038/s41586-023-05995-9
-
-            This function calculates the nth-percentile of the signal in a 10 second sliding window, 
-            then uses this as F0 in the formula dFF = (F-F0) / F0, where F=465 signal. 
-               param   self:                       current attributes of the signal_processing_object
-               param   seconds:                    window size, in seconds, in which to perform the dFF calculation
-               param   ref_percentile:             the percentile to use as the reference for the dFF calculation
-               create  self.dff:                   array containing excitation signal normalized relative to the filtered and fitted isosbestic 
-               return  self.signal_processing_log: list containing a record of processing steps so far applied to the data.
-        '''
-
-        ## Calculates the nth percentile of X-second bins in the 465 signal. 
-        
-        # The length of the signal will not be perfectly divisible by the number of seconds chosen, so need to calculate where the overflow is. 
-        bin_size = int(self.sampling_rate * seconds)
-        last_bin = (self.signal.size // bin_size) * bin_size
-        
-        # Reshape signal so that it is n rows of X second columns:
-        main_sig_array = self.signal[:last_bin].reshape([-1, bin_size])
-        remainder_sig = self.signal[last_bin:]
-
-        # Then calculate the nth percentile for X second increments + the remainder. 
-        # Main
-        sig_percentile = np.percentile(main_sig_array, ref_percentile, axis=1).reshape([-1, 1])
-        # Remainder
-        try:
-            sig_percentile_remainder = np.percentile(remainder_sig, ref_percentile)
-        except IndexError:
-            print(f'Remarkably, the signal length ({self.signal.size}) is perfectly divisible by the bin size ({bin_size}).')
-            sig_percentile_remainder = np.array([])
-
-        #Calculate dFF for both main and remainder:
-        main_dff = (main_sig_array - sig_percentile) / sig_percentile
-        remainder_dff = (remainder_sig - sig_percentile_remainder) / sig_percentile_remainder
-
-        # Combine body and tail. 
-        self.dff = np.append(main_dff.reshape([1, -1]), remainder_dff.reshape([1, -1]))
-
-        self.signal_processing_log.append(f'deltaF/F calculated based on {ref_percentile}th percentile in {seconds}s windows.')
-
-
-        return self.signal_processing_log
-
-    def detrend_photobleaching(self):
-
-        # Fit two-phsae decay curve to signal
-        intercept, plateau = np.median(self.signal[:int(self.sampling_rate)+1]), np.min(self.signal)
-        sig_fit = optimize.minimize(fit_decay_double, x0=[0.1, 0.001, 0.2], args=(intercept, plateau, self.signal, self.timestamps), method='Nelder-Mead')
-        
-        # Fit two-phsae decay curve to isosbestic
-        iso_intercept, iso_plateau = np.median(self.isosbestic[:int(self.sampling_rate)+1]), np.min(self.isosbestic)
-        iso_fit = optimize.minimize(fit_decay_double, x0=sig_fit['x'], args=(iso_intercept, iso_plateau, self.isosbestic, self.timestamps), method='Nelder-Mead')
-             
-        # Subtract decay curves from both signals. 
-        self.detrended_sig = self.signal-dbl_decay(sig_fit['x'], intercept, plateau, self.timestamps)
-        self.detrended_iso = self.isosbestic-dbl_decay(iso_fit['x'], iso_intercept, iso_plateau, self.timestamps)
-      
-        self.signal_processing_log.append('Signal and isosbestic detrended according to individual two-phase decay curves.')
-
-        return self.signal_processing_log
-
-    def correct_movement(self):
-        try:
-            coefs = np.polyfit(self.detrended_iso, self.detrended_sig, 1)
-        except AttributeError as e:
-            raise Exception('detrend_photobleaching() must be run prior to movement correction.') from e
-
-        # Estimate motion over course of session based on isosbestic. 
-        est_motion = coefs[1] + coefs[0] * self.detrended_iso
-
-        # Correct GRAB signal by subtracting estimated motion from detrended signal. 
-        self.motion_corrected_signal = self.detrended_sig - est_motion
-
-        self.signal_processing_log.append('Motion component of signal estimated based on linear fit and removed from detrended signal.')
-
-        # For compatability with existing functions:
-        self.dff = self.motion_corrected_signal
-        # Obviously, the motion corrected signal is NOT in units of DeltaF/F, and this hack will be repaired in future versions. 
-        # For now, I just want to be able to implement the detrend + motion correct with existing save files and existing functions. 
-
-        return self.signal_processing_log
-
-    def z_norm_deltaff(self, normalization_window_size = 'None'):
-        '''
-            Convert DeltaF/F to Robust Z scores based on a sliding window. 
-            param  self:                       attributes of signal_processing_object
-            param normalization_window_size    The size of the sliding window (in seconds) to use for calculating normalized_signal.
-            create self.normalized_signal:     robust z normalized DeltaF/F
-            return self.signal_processing_log: list containing a record of processing steps so far applied to the data.
-        '''
-        if normalization_window_size == 'None':
-            self.normalized_signal = calc_robust_z(self.dff)
-            self.signal_processing_log.append(f'Robust Z-Score normalization performed on deltaF/F using global median and MAD.')
-            return self.signal_processing_log
-        
-        # Convert window size into a chunk of indices using the internal sampling rate (samples/second).
-        average_window_step_size = int(normalization_window_size*self.sampling_rate)
-        
-        # Confirm that self.dff has been created and generate the end cap for the while loop.
-        try:
-            signal_size = self.dff.size
-        except AttributeError as e:
-            raise Exception('Cannot normalize deltaF/F if deltaF/F has not been created! Run calc_dff().') from e
-        
-        # Initialize loop
-        self.normalized_signal = np.array([])
-        window_start = 0
-        while window_start < signal_size:
-            # Set bounds for calculation and check whether we're at the end
-            window_end = window_start + average_window_step_size
-            if window_end > signal_size:
-                window_end = signal_size
-
-            # Perform the normalization on the current window and store it
-            self.normalized_signal = np.append(self.normalized_signal,
-                                               calc_robust_z(self.dff[window_start:window_end]))
-            
-            # Increment start idx to avoid infinite loop.
-            window_start = window_end
-        
-
-        self.signal_processing_log.append(f'Robust Z-Score normalization performed on deltaF/F using sliding {normalization_window_size}s window.')
-        return self.signal_processing_log
-
-
     def remove_artifacts(self, reference_channel = 'Isosbestic', threshold = -10, buffer_size = 50):
         '''
             The artifacts present in data from the Doric system are strange and appear to be the product of the signal cutting out
@@ -658,20 +520,35 @@ class sig_processing_object(object):
         self.signal_processing_log.append(f'Artifacts removed from Signal and Isosbestic using threshold={threshold} on {reference_channel}.')
         return self.signal_processing_log
 
-    def create_dataframe(self):
+    def identify_TTLs(self, store_full=False):
         '''
-            Combine current timestamps, DeltaF/F, and normalized DeltaF/F into DataFrame.
-            param  self:                       attributes of signal_processing_object
-            create self.processed_dataframe:   DataFrame with index = Timestamps, and Columns = raw and normalized DeltaF/F signal
-            return self.signal_processing_log: list containing a record of processing steps so far applied to the data.
+            :param self: attributes of signal_processing_object
+            :param store_full: Boolean flag to determine whether full TTL on time should be stored in addition to ttl onsets. 
+            :create full_ttls: dataframe containing full TTL ontimes. 
+            :create ttl_starts: dictionary containing key: 'TTL_Name', value: array of TTL on times. 
         '''
-        try:
-            self.processed_dataframe = pd.DataFrame(index=self.timestamps, columns = ['RawSignal', 'Z_Signal'], 
-                                                    data=np.hstack([self.dff.reshape(-1, 1), self.normalized_signal.reshape(-1, 1)]))
-            self.signal_processing_log.append('Timestamps, Raw Signal, and Normalized Signal combined into DataFrame (self.processed_dataframe).')
-            return self.signal_processing_log
-        except AttributeError as e:
-            raise Exception('Missing attributes. Run calc_dff() and z_norm_deltaff().') from e
+        ttl_channels = list(filter(lambda x: 'TTL_' in x, self.input_data_frame.columns))
+        self.ttl_starts = {}
+        if store_full:
+            self.full_ttls = self.input_data_frame.loc[:, ttl_channels]
+            self.full_ttls.index = self.input_data_frame.loc[:, 'Time']
+        for ttl_ch in ttl_channels:
+            switch_points = np.diff(self.input_data_frame.loc[:, ttl_ch], prepend=0)
+            ttl_starts, = np.where(switch_points==1)
+            if ttl_starts.size > 0:
+                # Brief corner-case check:
+                if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
+                    ttl_starts[0] = self.input_data_frame.index[0]
+                    # In the event that data have been dropped from the beginning of the file and 
+                    # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
+                    # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
+            self.ttl_starts[ttl_ch] = self.input_data_frame.loc[ttl_starts, 'Time'].values
+
+        if len(self.ttl_starts) == 0:
+            log_txt = 'Attempted to identify TTL onsets, but none were found.' 
+        else:
+            log_txt = 'TTL onset timestamps identified.'
+        self.signal_processing_log.append(log_txt)
 
     def trim_signal(self, start_time, end_time):
         '''
@@ -694,64 +571,269 @@ class sig_processing_object(object):
 
         self.signal_processing_log.append(f'Signal cropped to {start_time}s:{end_time}s.')
         
-        if 'deltaF/F calculated.' in self.signal_processing_log:
-            warnings.warn('Raw signal has been trimmed. Re-run calc_dff() and z_norm_delta() to perform normalizations on trimmed data.')
+        try:
+            del self.processed_dataframe
+            warnings.warn('Raw signal has been trimmed. Re-run correct_movement() and z_norm_signal() to perform normalizations on trimmed data.')
+            self.signal_processing_log.append('self.processed_dataframe removed following signal trimming.')
+        except AttributeError:
+            pass
 
-            try:
-                del self.processed_dataframe
-                self.signal_processing_log.append('self.processed_dataframe removed following signal trimming.')
-            except AttributeError:
-                pass
+        return self.signal_processing_log
+    
+    def downsample_signal(self, downsample_factor):
+        '''
+            Pre-processing step 0. 
+            Downsample without smoothing. 
+            :param self: current attributes of the signal_processing_object
+            :param downsample_factor: Fold change for downsampling (e.g. 2 will cut the sampling rate in half, 3 in a third)
+        '''
+
+        #Calculate target sampling rate and apply anti-aliasing filter.
+        target_sampling_rate = self.sampling_rate / downsample_factor
+        new_nyq = target_sampling_rate/2
+
+        # Apply filter to signal and isosbestic to remove all frequencies above the nyquist frequency of the downsampled sampling rate.
+        self.signal = butter_lowpass_filter(self.signal, new_nyq, self.sampling_rate/2)
+        self.isosbestic = butter_lowpass_filter(self.isosbestic, new_nyq, self.sampling_rate/2)
+        
+        self.signal_processing_log.append(f'{new_nyq}Hz anti-aliasing filter applied to Signal and Isosbestic.')
+        
+
+        # Perform the downsample
+        downsampler_index = np.arange(0, self.signal.size, downsample_factor)
+        self.timestamps = self.timestamps[downsampler_index]
+        self.signal = self.signal[downsampler_index]
+        self.isosbestic = self.isosbestic[downsampler_index]
+
+        # Check whether this is being applied to previously processed data. 
+        try:
+            del self.processed_dataframe
+            warnings.warn(f'Input data downsampled. Re-process signal.')
+            self.signal_processing_log.append('self.processed_dataframe removed following downsampling.')
+        except AttributeError:
+            pass
+
+
+        self.signal_processing_log.append(f'Signal downsampled by a factor of {downsample_factor}. {self.sampling_rate}-->{target_sampling_rate}')
+        self.sampling_rate = target_sampling_rate
+        return self.signal_processing_log
+
+    def filter_signals(self, cutoff_Hz = 10):
+        '''
+            Pre-processing Step 1. 
+            Applies a lowpass filter on both excitation and isosbestic signals. 
+            :param self: Current attributes of the signal_processing_object
+            :param cutoff_Hz: Cut off Hz to use for filter. Default = 10 Hz. 
+        '''
+
+        # Apply filter
+        current_nyq = self.sampling_rate/2
+        self.signal = butter_lowpass_filter(self.signal, cutoff_Hz, current_nyq)
+        self.isosbestic = butter_lowpass_filter(self.isosbestic, cutoff_Hz, current_nyq)
+
+        # Check whether this is being applied to previously processed data. 
+        try:
+            del self.processed_dataframe
+            warnings.warn(f'Input data downsampled. Re-process signal.')
+            self.signal_processing_log.append('self.processed_dataframe removed following signal filtering.')
+        except AttributeError:
+            pass
+        
+        self.signal_processing_log.append(f'{new_nyq}Hz lowpass filter applied to Signal and Isosbestic.')
+        return self.signal_processing_log
+    
+    def detrend_photobleaching(self):
+        '''
+            Preprocessing Step 2
+
+            Separately fits two-phase decay curves to excitation and isosbestic signals. These decay curves are then subtracted from the input signals. 
+            :param self: attributes of sig_processing_object
+            :create detrended_sig: Excitation signal with fitted decay curve component removed. 
+            :create detrended_iso: Isosbestic signal with fitted decay curve component removed. 
+        '''
+
+        # Fit two-phsae decay curve to signal
+        intercept, plateau = np.median(self.signal[:int(self.sampling_rate)+1]), np.min(self.signal) # Initial inputs for decay curve are an estimate of intercept at t=0, and the lowest point the signal reaches.
+        sig_fit = optimize.minimize(fit_decay_double, x0=[0.1, 0.001, 0.2], args=(intercept, plateau, self.signal, self.timestamps), method='Nelder-Mead')
+        
+        # Fit two-phsae decay curve to isosbestic using same logic as above. 
+        iso_intercept, iso_plateau = np.median(self.isosbestic[:int(self.sampling_rate)+1]), np.min(self.isosbestic)
+        iso_fit = optimize.minimize(fit_decay_double, x0=sig_fit['x'], args=(iso_intercept, iso_plateau, self.isosbestic, self.timestamps), method='Nelder-Mead')
+             
+        # Subtract decay curves from both signals. 
+        self.detrended_sig = self.signal-dbl_decay(sig_fit['x'], intercept, plateau, self.timestamps)
+        self.detrended_iso = self.isosbestic-dbl_decay(iso_fit['x'], iso_intercept, iso_plateau, self.timestamps)
+      
+        self.signal_processing_log.append('Signal and isosbestic detrended according to individual two-phase decay curves.')
 
         return self.signal_processing_log
 
-
-    def identify_peaks_GunaydinMethod(self):
+    def correct_movement(self):
         '''
-            A heuristic for identifying peaks in signal. Taken from https://dx.doi.org/10.1016%2Fj.cell.2014.05.017
-            param  self:                       attributes of signal_processing_object
-            create self.peak_timestamps:       timestamps at which a peak has been identified
-            return self.peak_timestamps:       ''
+            Preprocessing Step 3
 
+            Applies linear fit to excitation signal based on isosbestic signal. Coefficient is the component of the excitation signal that is explainable
+            by the isosbestic, which is is assumbed to fluctuate based on movement. 
+            :param self:                        attributes of signal_processing_object
+            :create motion_corrected_signal:    Excitation signal with estimated motion component subtracted.
         '''
-        warnings.warn('This method does not work well. Use id_transients instead. This method will be removed in 2.0.0')
-        #1) take the derivative of the squared difference between two different low pass filtered copies of the time series data (at 40Hz and 0.4Hz);
-        
-        # Generate low pass filtered copies at 40Hz and 0.4Hz. 
+
+
+        # Estimate movement component using first order linear regression.
         try:
-            filt_40hz = butter_lowpass_filter(self.dff, 40, self.sampling_rate/2)
-            filt_point4hz = butter_lowpass_filter(self.dff, 0.4, self.sampling_rate/2)
-        except ValueError as e:
-            raise Exception(f'Data must have sampling rate of >80Hz to apply Gunyadin method. Signal has sampling rate {self.sampling_rate}.') from e
+            coefs = np.polyfit(self.detrended_iso, self.detrended_sig, 1)
+        except AttributeError as e:
+            raise Exception('detrend_photobleaching() must be run prior to movement correction.') from e
 
-        # Calculate the squared difference between the copies. 
-        sq_diff = (filt_40hz - filt_point4hz)**2
+        # Estimate motion over course of session based on isosbestic and linear fit. 
+        est_motion = coefs[1] + coefs[0] * self.detrended_iso
+
+        # Correct GRAB signal by subtracting estimated motion from detrended signal. 
+        self.motion_corrected_signal = self.detrended_sig - est_motion
+
+        self.signal_processing_log.append('Motion component of signal estimated based on linear fit and removed from detrended signal.')
+        return self.signal_processing_log
+
+    def z_norm_signal(self, normalization_window_size = 'None'):
+        '''
+            Preprocessing Step 4
+            Convert DeltaF/F to Robust Z scores based on a sliding window. 
+            param  self:                       attributes of signal_processing_object
+            param normalization_window_size    The size of the sliding window (in seconds) to use for calculating normalized_signal.
+            create self.normalized_signal:     robust z normalized DeltaF/F
+            return self.signal_processing_log: list containing a record of processing steps so far applied to the data.
+        '''
+        if normalization_window_size == 'None':
+            self.normalized_signal = calc_robust_z(self.motion_corrected_signal)
+            self.signal_processing_log.append(f'Robust Z-Score normalization performed on deltaF/F using global median and MAD.')
+            return self.signal_processing_log
+        
+        # Convert window size into a chunk of indices using the internal sampling rate (samples/second).
+        average_window_step_size = int(normalization_window_size*self.sampling_rate)
+        
+        # Confirm that self.motion_corrected_signal has been created and generate the end cap for the while loop.
+        try:
+            signal_size = self.motion_corrected_signal.size
+        except AttributeError as e:
+            raise Exception('Cannot normalize signal if it has not already been motion corrected! Run correct_movement().') from e
+        
+        # Initialize loop
+        self.normalized_signal = np.array([])
+        window_start = 0
+        while window_start < signal_size:
+            # Set bounds for calculation and check whether we're at the end
+            window_end = window_start + average_window_step_size
+            if window_end > signal_size:
+                window_end = signal_size
+
+            # Perform the normalization on the current window and store it
+            self.normalized_signal = np.append(self.normalized_signal,
+                                               calc_robust_z(self.motion_corrected_signal[window_start:window_end]))
+            
+            # Increment start idx to avoid infinite loop.
+            window_start = window_end
         
 
-        #2) threshold these values at 95% confidence interval (Z=2)
-        
-        # Normalize the signal for comparing to confidence interval threshold
-        sq_diff_med = np.median(sq_diff)
-        sq_diff_MAD = np.median(abs(sq_diff-sq_diff_med))*1.4826
-        sq_diff_normalized = (sq_diff-sq_diff_med)/sq_diff_MAD
+        self.signal_processing_log.append(f'Robust Z-Score normalization performed on motion corrected signal using sliding {normalization_window_size}s window.')
+        return self.signal_processing_log
 
-        # Calculate the derivative
-        dy = np.diff(sq_diff_normalized, prepend=0)
-        dx = 1/self.sampling_rate
-        deriv = dy/dx
+    def z_norm_deltaff(self):
 
-        # Identify points where derivative exceeds threshold
-        deriv_peaks = np.where(deriv>=2)
+        raise NotImplentedError('The name of this function has been changed as of v3.0.0. Use z_norm_signal().')
+
+    def create_dataframe(self):
+        '''
+            Combine current timestamps, DeltaF/F, and normalized DeltaF/F into DataFrame.
+            param  self:                       attributes of signal_processing_object
+            create self.processed_dataframe:   DataFrame with index = Timestamps, and Columns = raw and normalized DeltaF/F signal
+            return self.signal_processing_log: list containing a record of processing steps so far applied to the data.
+        '''
+        try:
+            self.processed_dataframe = pd.DataFrame(index=self.timestamps, columns = ['RawSignal', 'Z_Signal'], 
+                                                    data=np.hstack([self.motion_corrected_signal.reshape(-1, 1), self.normalized_signal.reshape(-1, 1)]))
+            self.signal_processing_log.append('Timestamps, Raw Signal, and Normalized Signal combined into DataFrame (self.processed_dataframe).')
+            return self.signal_processing_log
+        except AttributeError as e:
+            raise Exception('Missing attributes. Run correct_movement() and z_norm_signal().') from e
+
+    def align_to_TTLs(self, reference_TTL = 'TTL_01', baseline_time = 10, epoch_time = 10, signal_to_slice='Z_Signal'):
+        '''
+            Aligns desired signal around a specified window to starts for a specified TTL.
+            :param self:            Attributes of signal_processing_object
+            :param reference_TTL:   Name of TTL to use for analysis. Default='TTL_01'
+            :param baseline_time:   Seconds to use as baseline (pre-TTL) slice. default=10
+            :param epoch_time:      Seconds to use as epoch (post-TTL) slice. default=10
+            :param signal_to_slice: Which signal from processed_dataframe to slice (Z_Signal or RawSignal). Default=Z_Signal.
+            :create trial_data:     Array in which each row is the signal sliced around the target TTL. 
+        '''
 
 
+        # Determine number of bins to devote to baseline.
+        n_baseline_bins = int(baseline_time * self.sampling_rate)
+        # The next frame after n_baseline_bins is where we want to ensure that our 0 ends up in all slices. 
+        target_zero_index = n_baseline_bins+1
 
-        #3) classify these smooth derivative-based time points as ‘‘peaks’’ if absolute fluorescence measurement is above 95% confidence interval
-        robust_z_peaks = np.where(abs(self.normalized_signal)>=2)
-        self.peak_timestamps = np.intersect1d(self.timestamps[deriv_peaks], self.timestamps[robust_z_peaks])
-        
+        slices = []
+        for time in self.ttl_starts[reference_TTL]:
+            # Take an initial slice of timestamps based on baseline and epoch lengths relative to ttl_start 
+            timestamps_bools = (self.processed_dataframe.index>(time-baseline_time)) & (self.processed_dataframe.index<(time+epoch_time))
+            timestamps = self.processed_dataframe.index[timestamps_bools]
 
-        self.signal_processing_log.append('Fluorescent peaks (and/or troughs) identified according to Gunyadin et al., 2014.')
 
+            isi = 1 / self.sampling_rate
+            real_sample_spacing = np.diff(timestamps)
+            real_sample_spacing = np.insert(real_sample_spacing, 0, isi)
+
+            off_indices = np.where(real_sample_spacing>=isi*1.05)[0]
+
+            padded_signal = self.processed_dataframe.loc[timestamps, signal_to_slice].values
+
+            for diff_idx in np.flip(off_indices):
+                n_samples_skipped = np.round(real_sample_spacing[diff_idx] / isi)-1
+
+                for i in np.arange(n_samples_skipped):
+                    padded_signal = np.insert(padded_signal, diff_idx, np.nan)
+
+            
+
+
+            # Get indices of timestamps that currently start and end the slice window.
+            slice_start_idx = np.where(self.processed_dataframe.index==timestamps[0])[0][0] # np.where returns an array within a tuple. [0][0] gets the value.
+            slice_end_idx = np.where(self.processed_dataframe.index==timestamps[-1])[0][0]
+
+
+            # In all likelihood, these timestamps will be a little offset from what we want. 
+            # Calculate the current offset. 
+
+            current_zero_index = np.argmin(abs(timestamps-time))
+
+            zero_offset = target_zero_index - current_zero_index # Distance of the above from where we want it. 
+                # The sign of zero_offset will indicate the necessary direction of the frame shift. 
+                # The absolute magnitude of zero_offset indicates the number of frames to shift by. 
+
+            # If target_zero_index is LESS than current_zero_index, a number of elements must be removed from the baseline to shift 
+                # the window to the right.  
+            if zero_offset < 0:
+                padded_signal = np.delete(padded_signal, range(0, abs(zero_offset)))
+            # If target_zero_index is greater than the current_zero_index, then the current window must be shifted to the left
+                # That is, a number of elements must be added to baseline 
+            elif zero_offset > 0:
+                timestamps_to_prepend = self.processed_dataframe.index[slice_start_idx - zero_offset : slice_start_idx]
+                values_to_add = self.processed_dataframe.loc[timestamps_to_prepend, signal_to_slice]
+                padded_signal = np.insert(padded_signal, 0, values_to_add)
+
+            slices.append(padded_signal)
+
+
+        # Now everything is lined up, but that doesn't mean that it's all the same length. 
+
+        # We've gotten all the baselines lined up, so now it's just a matter of setting the epoch lengths right. 
+        # We'll do this by lopping off any extra from the end. 
+        min_slice_length = min(s.size for s in slices)
+        self.trial_data[reference_TTL] = np.empty([len(slices), min_slice_length])
+
+        for i, s in enumerate(slices):
+            self.trial_data[reference_TTL][i] = np.delete(s, range(min_slice_length, s.size))
 
     def id_transients(self, min_duration = 0.5, debug=False):
         '''
@@ -857,121 +939,6 @@ class sig_processing_object(object):
 
         if debug:
             raise RuntimeError
-
-    # TODO Comment these.
-    def identify_TTLs(self, store_full=False):
-        ttl_channels = list(filter(lambda x: 'TTL_' in x, self.input_data_frame.columns))
-
-        self.ttl_starts = {}
-
-        if store_full:
-            self.full_ttls = self.input_data_frame.loc[:, ttl_channels]
-            self.full_ttls.index = self.input_data_frame.loc[:, 'Time']
-
-        for ttl_ch in ttl_channels:
-
-            switch_points = np.diff(self.input_data_frame.loc[:, ttl_ch], prepend=0)
-
-            ttl_starts, = np.where(switch_points==1)
-            
-            if ttl_starts.size > 0:
-                # Brief corner-case check:
-                if (ttl_starts[0] == 0) and (self.input_data_frame.index[0] !=0):
-                    ttl_starts[0] = self.input_data_frame.index[0]
-                    # In the event that data have been dropped from the beginning of the file and 
-                    # a TTL begins in the first frame of the resulting dataframe, the index of the first TTL
-                    # will be recorded, incorrectly, as 0. It should be the first index of input_data_frame.
-
-            self.ttl_starts[ttl_ch] = self.input_data_frame.loc[ttl_starts, 'Time'].values
-
-        if len(self.ttl_starts) == 0:
-            log_txt = 'Attempted to identify TTL onsets, but none were found.' 
-        else:
-            log_txt = 'TTL onset timestamps identified.'
-        
-        self.signal_processing_log.append(log_txt)
-
-
-    def align_to_TTLs(self, reference_TTL = 'TTL_01', baseline_time = 10, epoch_time = 10, signal_to_slice='Z_Signal'):
-        # Determine number of bins to devote to baseline.
-        n_baseline_bins = int(baseline_time * self.sampling_rate)
-        # The next frame after n_baseline_bins is where we want to ensure that our 0 ends up in all slices. 
-        target_zero_index = n_baseline_bins+1
-
-        slices = []
-        for time in self.ttl_starts[reference_TTL]:
-            # Take an initial slice of timestamps based on baseline and epoch lengths relative to ttl_start 
-            timestamps_bools = (self.processed_dataframe.index>(time-baseline_time)) & (self.processed_dataframe.index<(time+epoch_time))
-            timestamps = self.processed_dataframe.index[timestamps_bools]
-
-
-            isi = 1 / self.sampling_rate
-            real_sample_spacing = np.diff(timestamps)
-            real_sample_spacing = np.insert(real_sample_spacing, 0, isi)
-
-            off_indices = np.where(real_sample_spacing>=isi*1.05)[0]
-
-            padded_signal = self.processed_dataframe.loc[timestamps, signal_to_slice].values
-
-            for diff_idx in np.flip(off_indices):
-                n_samples_skipped = np.round(real_sample_spacing[diff_idx] / isi)-1
-
-                for i in np.arange(n_samples_skipped):
-                    padded_signal = np.insert(padded_signal, diff_idx, np.nan)
-
-            
-
-
-            # Get indices of timestamps that currently start and end the slice window.
-            slice_start_idx = np.where(self.processed_dataframe.index==timestamps[0])[0][0] # np.where returns an array within a tuple. [0][0] gets the value.
-            slice_end_idx = np.where(self.processed_dataframe.index==timestamps[-1])[0][0]
-
-
-            # In all likelihood, these timestamps will be a little offset from what we want. 
-            # Calculate the current offset. 
-
-            # I don't remember what any of this was.
-            # # How do we get the current zero index when we're working from the padded signal? We can start off by getting signal closest to TTL: 
-            # time_closest_to_zero = timestamps[np.argmin(abs(timestamps - time))]
-            # sig_at_zero = self.processed_dataframe.loc[time_closest_to_zero, signal_to_slice]
-            # # Now we know the value of the signal at 0. 
-            # # We don't know for sure that 0 is the only time that the signal is at this value. So, we grab all instances, and their timestamps
-            # zero_candidate_indices, = np.where(padded_signal==sig_at_zero)
-            # if zero_candidate_indices.size>1:
-               #  zero_candidates_timestamps = self.processed_dataframe[self.processed_dataframe[signal_to_slice]==sig_at_zero].index
-               #  current_zero_index = zero_candidate_indices[np.where(zero_candidates_timestamps==time_closest_to_zero)[0]][0]            
-
-            current_zero_index = np.argmin(abs(timestamps-time))
-
-            zero_offset = target_zero_index - current_zero_index # Distance of the above from where we want it. 
-                # The sign of zero_offset will indicate the necessary direction of the frame shift. 
-                # The absolute magnitude of zero_offset indicates the number of frames to shift by. 
-
-            # If target_zero_index is LESS than current_zero_index, a number of elements must be removed from the baseline to shift 
-                # the window to the right.  
-            if zero_offset < 0:
-                padded_signal = np.delete(padded_signal, range(0, abs(zero_offset)))
-            # If target_zero_index is greater than the current_zero_index, then the current window must be shifted to the left
-                # That is, a number of elements must be added to baseline 
-            elif zero_offset > 0:
-                timestamps_to_prepend = self.processed_dataframe.index[slice_start_idx - zero_offset : slice_start_idx]
-                values_to_add = self.processed_dataframe.loc[timestamps_to_prepend, signal_to_slice]
-                padded_signal = np.insert(padded_signal, 0, values_to_add)
-
-
-            slices.append(padded_signal)
-
-
-        # Now everything is lined up, but that doesn't mean that it's all the same length. 
-
-        # We've gotten all the baselines lined up, so now it's just a matter of setting the epoch lengths right. 
-        # We'll do this by lopping off any extra from the end. 
-        min_slice_length = min(s.size for s in slices)
-        self.trial_data[reference_TTL] = np.empty([len(slices), min_slice_length])
-
-        for i, s in enumerate(slices):
-            self.trial_data[reference_TTL][i] = np.delete(s, range(min_slice_length, s.size))
-
 
     def shuffle_align(self, reference_TTL = 'TTL_01', n_iterations = 1000, baseline_time = 10, epoch_time=10, signal_to_slice='Z_Signal'):
         ''' 
