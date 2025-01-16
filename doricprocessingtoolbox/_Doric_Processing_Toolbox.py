@@ -360,7 +360,7 @@ class sig_processing_object(object):
 
             if major_version != __version__.split('.')[0]:
                 # Force exit if there's likely to be issues with backwards compatability. 
-                raise Exception(f'Version of input_file {input_file.__version__} is not supported. \
+                raise Exception(f'Version of input_file {input_spo.__version__} is not supported. \
                                   Current Version of Doric Processing Toolbox is {__version__}.')
 
             elif input_spo.__version__ != __version__:
