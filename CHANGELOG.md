@@ -1,7 +1,17 @@
+#### Version 3.1.0 #### 
+	- sig_processing_object.downsample_signal changed to take target sampling rate as input, rather than a step size for downsampling. Logic of determining step size has been incorporated into the function itself and altered to hew more closely to the target. If the actual sampling rate of the new signal deviates from the target by more than 5%, the user will be warned. 
+	- Separately, edited signal_processing_log to use up to date language in pd.read_csv if loading data from .csv. Namely, error_bad_lines is outdated. Updated to use on_bad_lines and require pandas>=1.3.0 (when the change was made) on installation. 
 #### Version 3.0.0 ####
-	-Preprocessing functions hacked in in 2.6 have been fully integrated. All references to self.dff have been removed. calc_dff_from_isosbestic and calc_dff_from_percentile have been deleted. z_norm_deltaff has been renamed z_norm_signal. Docstrings completed for all functions. 
+	- Preprocessing functions hacked in in 2.6 have been fully integrated. All references to self.dff have been removed. 
+	- calc_dff_from_isosbestic and calc_dff_from_percentile have been deleted. 
+	- z_norm_deltaff has been renamed z_norm_signal. 
+	- Docstrings completed for all functions. 
 #### Version 2.6.0 ####
-	- Added new pre-processing functionality: two-phase decay function based detrending to correct for photobleaching and an isosbestic based motion correction (which is fundamentally similar to the previous approach for DFF calculation that was based on the fitted isosbestic). This will be the standard analysis pipeline going forward. sig_processing_object is messy, and outdated functions relating to DFF calculations will be removed in future versions. Backwards compatability to with existing pickles that are built around calculating and analyzing "self.dff" is maintained for now, but will break with version 3.x.
+	- Added new pre-processing functionality: 
+		- two-phase decay function based detrending to correct for photobleaching
+		- an isosbestic based motion correction (which is fundamentally similar to the previous approach for DFF calculation that was based on the fitted isosbestic. 
+	- This will be the standard analysis pipeline going forward. sig_processing_object is messy, and outdated functions relating to DFF calculations will be removed in future versions. 
+	- Backwards compatability to with existing pickles that are built around calculating and analyzing "self.dff" is maintained for now, but will break with version 3.x.
 #### Version 2.5.0 ####
 	- Built package around existing file to make toolbox pip installable. 
 #### Version 2.4.1 ####

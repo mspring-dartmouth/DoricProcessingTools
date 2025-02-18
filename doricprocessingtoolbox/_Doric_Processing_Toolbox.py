@@ -1,4 +1,4 @@
-__version__ = '3.0.0'
+__version__ = '3.1.0'
 
 
 import pandas as pd
@@ -288,7 +288,7 @@ class sig_processing_object(object):
             self.trial_data = {} # This will be used in align_to_TTLs to store TTL aligned data.
 
             if '.csv' in input_file:
-                self.input_data_frame = pd.read_csv(input_file, skiprows=1, error_bad_lines=False, warn_bad_lines=True)
+                self.input_data_frame = pd.read_csv(input_file, skiprows=1, on_bad_lines='warn')
                 
                 # Purge extraneous columns
                 # AOut-1/2 are just the sin functions corresponding to the LED driver.
@@ -580,16 +580,18 @@ class sig_processing_object(object):
 
         return self.signal_processing_log
     
-    def downsample_signal(self, downsample_factor):
+    def downsample_signal(self, target_sampling_rate):
         '''
             Pre-processing step 0. 
             Downsample without smoothing. 
             :param self: current attributes of the signal_processing_object
             :param downsample_factor: Fold change for downsampling (e.g. 2 will cut the sampling rate in half, 3 in a third)
         '''
+        warnings.warn('As of v3.1.0, downsample_signal now takes the target sampling rate, rather than a downsampling factor. Did you use the right value?')
 
-        #Calculate target sampling rate and apply anti-aliasing filter.
-        target_sampling_rate = self.sampling_rate / downsample_factor
+
+        #Calculate step_size of downsampler based on target sampling rate and apply anti-aliasing filter.
+        downsample_factor = int(np.round(self.sampling_rate/target_sampling_rate))
         new_nyq = target_sampling_rate/2
 
         # Apply filter to signal and isosbestic to remove all frequencies above the nyquist frequency of the downsampled sampling rate.
@@ -614,8 +616,13 @@ class sig_processing_object(object):
             pass
 
 
-        self.signal_processing_log.append(f'Signal downsampled by a factor of {downsample_factor}. {self.sampling_rate}-->{target_sampling_rate}')
-        self.sampling_rate = target_sampling_rate
+        new_sampling_rate = 1/np.diff(self.timestamps).mean()
+        if abs(new_sampling_rate-target_sampling_rate)/target_sampling_rate > 0.05:
+            warning.warn(f'Target sampling rate was {target_sampling_rate}. Actual sampling rate is {new_sampling_rate}.')
+
+
+        self.signal_processing_log.append(f'Signal downsampled by a factor of {downsample_factor}. {self.sampling_rate}-->{new_sampling_rate}')
+        self.sampling_rate = new_sampling_rate
         return self.signal_processing_log
 
     def filter_signals(self, cutoff_Hz = 10):
