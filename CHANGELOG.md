@@ -1,11 +1,5 @@
-#### Version 3.1.0 #### 
-	- sig_processing_object.downsample_signal changed to take target sampling rate as input, rather than a step size for downsampling. Logic of determining step size has been incorporated into the function itself and altered to hew more closely to the target. If the actual sampling rate of the new signal deviates from the target by more than 5%, the user will be warned. 
-	- Separately, edited signal_processing_log to use up to date language in pd.read_csv if loading data from .csv. Namely, error_bad_lines is outdated. Updated to use on_bad_lines and require pandas>=1.3.0 (when the change was made) on installation. 
-#### Version 3.0.0 ####
-	- Preprocessing functions hacked in in 2.6 have been fully integrated. All references to self.dff have been removed. 
-	- calc_dff_from_isosbestic and calc_dff_from_percentile have been deleted. 
-	- z_norm_deltaff has been renamed z_norm_signal. 
-	- Docstrings completed for all functions. 
+#### Version 2.6.1 ####
+	- Implemented a general signal filtering function within sig_processing_object (filter_signals). 
 #### Version 2.6.0 ####
 	- Added new pre-processing functionality: 
 		- two-phase decay function based detrending to correct for photobleaching

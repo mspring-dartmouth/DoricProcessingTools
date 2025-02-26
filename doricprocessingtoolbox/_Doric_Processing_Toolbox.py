@@ -1,4 +1,5 @@
-__version__ = '3.1.0'
+__version__ = '2.6.1'
+
 
 
 import pandas as pd
@@ -422,7 +423,7 @@ class sig_processing_object(object):
 
             if major_version != __version__.split('.')[0]:
                 # Force exit if there's likely to be issues with backwards compatability. 
-                raise Exception(f'Version of input_file {input_file.__version__} is not supported. \
+                raise Exception(f'Version of input_file {input_spo.__version__} is not supported. \
                                   Current Version of Doric Processing Toolbox is {__version__}.')
 
             elif input_spo.__version__ != __version__:
@@ -436,7 +437,216 @@ class sig_processing_object(object):
                 self.__dict__[attribute_name] = attribute_value
 
         # Track the version number.  
+<<<<<<< HEAD
         self.__version__ = __version__        
+=======
+        self.__version__ = __version__
+
+    def downsample_signal(self, downsample_factor):
+        
+        #Prior to downsampling, determine target sampling rate and apply anti-aliasing filter.
+        target_sampling_rate = self.sampling_rate / downsample_factor
+        new_nyq = target_sampling_rate/2
+
+        # Apply filter to signal and isosbestic to remove all frequencies above the nyquist frequency of the downsampled sampling rate.
+        self.signal = butter_lowpass_filter(self.signal, new_nyq, self.sampling_rate/2)
+        self.isosbestic = butter_lowpass_filter(self.isosbestic, new_nyq, self.sampling_rate/2)
+        
+        self.signal_processing_log.append(f'{new_nyq}Hz anti-aliasing filter applied to Signal and Isosbestic.')
+        
+        downsampler_index = np.arange(0, self.signal.size, downsample_factor)
+
+        self.timestamps = self.timestamps[downsampler_index]
+        self.signal = self.signal[downsampler_index]
+        self.isosbestic = self.isosbestic[downsampler_index]
+
+
+        if 'deltaF/F calculated.' in self.signal_processing_log:
+            warnings.warn(f'Input data downsampled. Re-calculate DFF.')
+            try:
+                del self.processed_dataframe
+                self.signal_processing_log.append('self.processed_dataframe removed following downsampling.')
+            except AttributeError:
+                pass
+
+
+
+        self.signal_processing_log.append(f'Signal downsampled by a factor of {downsample_factor}. {self.sampling_rate}-->{target_sampling_rate}')
+        self.sampling_rate = target_sampling_rate
+        return self.signal_processing_log
+
+
+    def filter_signals(self, filtering_threshold=10, order=4):
+        '''
+			Applies a 4th order 10Hz (by default) low-pass butterworth filter to the isosbestic and excitation channels. 
+			:param self: current attributes of the signal_processing_object
+			:param filtering_threshold: the maximum Hz to permit in the signal.
+			:param order: the filter order to use. Higher orders sacrifice accuracy for steeper drop-offs after the cut-off. 4 seems a good balance. 
+        ''' 
+        self.isosbestic = butter_lowpass_filter(self.isosbestic, filtering_threshold, self.sampling_rate/2, order=order)
+        self.signal = butter_lowpass_filter(self.signal, filtering_threshold, self.sampling_rate/2, order=order)
+        self.signal_processing_log.append(f'{order}th order Butterworth lowpass filter ({filtering_threshold}Hz) applied to isosbestic and signal channels.')
+
+
+        if hasattr(self, 'processed_dataframe'):
+            warnings.warn('Raw traces have been filtered. Detrending, movement correction, and normalization must be re-executed.')
+
+
+        return self.signal_processing_log
+
+    # Fit the processed isosbestic signal was fitted to the excitation signal using a linear fit to correct for signal decay. 
+    def calc_dff_from_isosbestic(self):
+        '''
+            A function for calculating the DeltaF/F based on the isosbestic. See Lerner et al. (2015) Cell. 10.1016/j.cell.2015.07.014. 
+
+            This function filters the isosbestic channel, fits it to the signal channel, and then calculates dF/F from the fit.
+                param   self:                       current attributes of the signal_processing_object
+                create  self.fitted_isosbestic:     array containing filtered isosbestic with linear fit applied
+                create  self.dff:                   array containing excitation signal normalized relative to the filtered and fitted isosbestic 
+                return  self.signal_processing_log: list containing a record of processing steps so far applied to the data.
+        '''
+
+        # Fit isosbestic channel to signal channel using linear fit.
+        fit_coefs = np.polyfit(self.isosbestic, self.signal, 1)
+        self.fitted_isobestic = (fit_coefs[0] * self.isosbestic) + fit_coefs[1]
+
+        self.signal_processing_log.append('Linear fit applied to isosbestic channel.')
+
+        # Calculate the DeltaF / F. 
+        self.dff = (self.signal - self.fitted_isobestic) / self.fitted_isobestic
+        self.signal_processing_log.append(r'deltaF/F calculated based on isosbestic.')
+
+        return self.signal_processing_log
+
+     
+    def calc_dff_from_percentile(self, seconds=10, ref_percentile=5):
+        '''
+            A function for calcuating the DeltaF/F using an alternate, isosbestic free method. 
+            This method is based on Krok et al. in BioRxiv https://doi.org/10.1038/s41586-023-05995-9
+
+            This function calculates the nth-percentile of the signal in a 10 second sliding window, 
+            then uses this as F0 in the formula dFF = (F-F0) / F0, where F=465 signal. 
+               param   self:                       current attributes of the signal_processing_object
+               param   seconds:                    window size, in seconds, in which to perform the dFF calculation
+               param   ref_percentile:             the percentile to use as the reference for the dFF calculation
+               create  self.dff:                   array containing excitation signal normalized relative to the filtered and fitted isosbestic 
+               return  self.signal_processing_log: list containing a record of processing steps so far applied to the data.
+        '''
+
+        ## Calculates the nth percentile of X-second bins in the 465 signal. 
+        
+        # The length of the signal will not be perfectly divisible by the number of seconds chosen, so need to calculate where the overflow is. 
+        bin_size = int(self.sampling_rate * seconds)
+        last_bin = (self.signal.size // bin_size) * bin_size
+        
+        # Reshape signal so that it is n rows of X second columns:
+        main_sig_array = self.signal[:last_bin].reshape([-1, bin_size])
+        remainder_sig = self.signal[last_bin:]
+
+        # Then calculate the nth percentile for X second increments + the remainder. 
+        # Main
+        sig_percentile = np.percentile(main_sig_array, ref_percentile, axis=1).reshape([-1, 1])
+        # Remainder
+        try:
+            sig_percentile_remainder = np.percentile(remainder_sig, ref_percentile)
+        except IndexError:
+            print(f'Remarkably, the signal length ({self.signal.size}) is perfectly divisible by the bin size ({bin_size}).')
+            sig_percentile_remainder = np.array([])
+
+        #Calculate dFF for both main and remainder:
+        main_dff = (main_sig_array - sig_percentile) / sig_percentile
+        remainder_dff = (remainder_sig - sig_percentile_remainder) / sig_percentile_remainder
+
+        # Combine body and tail. 
+        self.dff = np.append(main_dff.reshape([1, -1]), remainder_dff.reshape([1, -1]))
+
+        self.signal_processing_log.append(f'deltaF/F calculated based on {ref_percentile}th percentile in {seconds}s windows.')
+
+
+        return self.signal_processing_log
+
+    def detrend_photobleaching(self):
+
+        # Fit two-phsae decay curve to signal
+        intercept, plateau = np.median(self.signal[:int(self.sampling_rate)+1]), np.min(self.signal)
+        sig_fit = optimize.minimize(fit_decay_double, x0=[0.1, 0.001, 0.2], args=(intercept, plateau, self.signal, self.timestamps), method='Nelder-Mead')
+        
+        # Fit two-phsae decay curve to isosbestic
+        iso_intercept, iso_plateau = np.median(self.isosbestic[:int(self.sampling_rate)+1]), np.min(self.isosbestic)
+        iso_fit = optimize.minimize(fit_decay_double, x0=sig_fit['x'], args=(iso_intercept, iso_plateau, self.isosbestic, self.timestamps), method='Nelder-Mead')
+             
+        # Subtract decay curves from both signals. 
+        self.detrended_sig = self.signal-dbl_decay(sig_fit['x'], intercept, plateau, self.timestamps)
+        self.detrended_iso = self.isosbestic-dbl_decay(iso_fit['x'], iso_intercept, iso_plateau, self.timestamps)
+      
+        self.signal_processing_log.append('Signal and isosbestic detrended according to individual two-phase decay curves.')
+
+        return self.signal_processing_log
+
+    def correct_movement(self):
+        try:
+            coefs = np.polyfit(self.detrended_iso, self.detrended_sig, 1)
+        except AttributeError as e:
+            raise Exception('detrend_photobleaching() must be run prior to movement correction.') from e
+
+        # Estimate motion over course of session based on isosbestic. 
+        est_motion = coefs[1] + coefs[0] * self.detrended_iso
+
+        # Correct GRAB signal by subtracting estimated motion from detrended signal. 
+        self.motion_corrected_signal = self.detrended_sig - est_motion
+
+        self.signal_processing_log.append('Motion component of signal estimated based on linear fit and removed from detrended signal.')
+
+        # For compatability with existing functions:
+        self.dff = self.motion_corrected_signal
+        # Obviously, the motion corrected signal is NOT in units of DeltaF/F, and this hack will be repaired in future versions. 
+        # For now, I just want to be able to implement the detrend + motion correct with existing save files and existing functions. 
+
+        return self.signal_processing_log
+
+    def z_norm_deltaff(self, normalization_window_size = 'None'):
+        '''
+            Convert DeltaF/F to Robust Z scores based on a sliding window. 
+            param  self:                       attributes of signal_processing_object
+            param normalization_window_size    The size of the sliding window (in seconds) to use for calculating normalized_signal.
+            create self.normalized_signal:     robust z normalized DeltaF/F
+            return self.signal_processing_log: list containing a record of processing steps so far applied to the data.
+        '''
+        if normalization_window_size == 'None':
+            self.normalized_signal = calc_robust_z(self.dff)
+            self.signal_processing_log.append(f'Robust Z-Score normalization performed on deltaF/F using global median and MAD.')
+            return self.signal_processing_log
+        
+        # Convert window size into a chunk of indices using the internal sampling rate (samples/second).
+        average_window_step_size = int(normalization_window_size*self.sampling_rate)
+        
+        # Confirm that self.dff has been created and generate the end cap for the while loop.
+        try:
+            signal_size = self.dff.size
+        except AttributeError as e:
+            raise Exception('Cannot normalize deltaF/F if deltaF/F has not been created! Run calc_dff().') from e
+        
+        # Initialize loop
+        self.normalized_signal = np.array([])
+        window_start = 0
+        while window_start < signal_size:
+            # Set bounds for calculation and check whether we're at the end
+            window_end = window_start + average_window_step_size
+            if window_end > signal_size:
+                window_end = signal_size
+
+            # Perform the normalization on the current window and store it
+            self.normalized_signal = np.append(self.normalized_signal,
+                                               calc_robust_z(self.dff[window_start:window_end]))
+            
+            # Increment start idx to avoid infinite loop.
+            window_start = window_end
+        
+
+        self.signal_processing_log.append(f'Robust Z-Score normalization performed on deltaF/F using sliding {normalization_window_size}s window.')
+        return self.signal_processing_log
+
+>>>>>>> 24c21094b3b38bcc11080a00836e75c7a19ea1e2
 
     def remove_artifacts(self, reference_channel = 'Isosbestic', threshold = -10, buffer_size = 50):
         '''
