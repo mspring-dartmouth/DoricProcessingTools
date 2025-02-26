@@ -743,10 +743,6 @@ class sig_processing_object(object):
 
         self.signal_processing_log.append(f'Robust Z-Score normalization performed on motion corrected signal using sliding {normalization_window_size}s window.')
         return self.signal_processing_log
-
-    def z_norm_deltaff(self, normalization_window_size):
-
-        raise NotImplentedError('The name of this function has been changed as of v3.0.0. Use z_norm_signal().')
         
     def create_dataframe(self):
         '''
